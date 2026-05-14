@@ -1,0 +1,57 @@
+[
+  {
+    "id": "iteration-1",
+    "type": "iteration",
+    "title": "Iteration 1 — Phase 0 + initial Phase 1-6 scaffolding",
+    "status": "completed",
+    "completed_at": "2026-05-14T15:42:00Z",
+    "summary": "Monorepo (pnpm workspaces, apps/web + apps/ops + packages/{agents,db,inngest,shared}); 9 agents (Roast, Rewrite, BrandVoice, Onboarder, SendInfra warmup + personaliser, PerformanceMonitor, Outbound, Support); Anthropic client with prompt caching; Inngest durable functions with operator approval gate; Stripe webhook + checkout route; Roast page + API + OG image; onboarding wizard; customer + operator dashboards; legal pages; CI workflow; 26 passing tests.",
+    "verification": {
+      "typecheck": "PASS",
+      "test": "PASS (26/26)",
+      "build": "deferred (no env in this iteration)"
+    }
+  },
+  {
+    "id": "prd-001",
+    "title": "Monorepo scaffold, deploy preview pipeline, env management, secrets vault",
+    "status": "completed",
+    "completed_at": "2026-05-14T15:42:00Z",
+    "summary": "Root package.json + pnpm-workspace.yaml + tsconfig.base.json + apps/web + apps/ops + packages/{agents,db,inngest,shared} + .env.example covering Anthropic/Stripe/Supabase/Inngest/Smartlead/Postmark/Apollo/Sentry/PostHog + zod-validated env loader + GitHub Actions CI."
+  },
+  {
+    "id": "prd-002",
+    "title": "Supabase project + schema migrations",
+    "status": "completed",
+    "completed_at": "2026-05-14T15:42:00Z",
+    "summary": "packages/db/migrations/0001_init.sql covering all PRD §5.3 tables: customers, sequences, campaigns, send_batches, prospects, performance_snapshots, approvals_queue, events, roasts, leads. Includes enums, indexes, updated_at trigger, RLS baselines."
+  },
+  {
+    "id": "prd-003",
+    "title": "Inngest project, basic functions wired",
+    "status": "completed",
+    "completed_at": "2026-05-14T15:42:00Z",
+    "summary": "packages/inngest with typed event registry + 4 durable functions (onboardingPipeline with operator approval gate via step.waitForEvent, roastSubmitted, checkoutCompleted, performanceDailyPull cron). Served from apps/web/api/inngest route."
+  },
+  {
+    "id": "prd-004",
+    "title": "Stripe test mode + webhook handler stub",
+    "status": "completed",
+    "completed_at": "2026-05-14T15:42:00Z",
+    "summary": "apps/web/api/stripe/webhook (verifies signature, upserts customer, dispatches Inngest event) + apps/web/api/checkout (creates session). API version pinned to 2025-02-24.acacia."
+  },
+  {
+    "id": "prd-005",
+    "title": "Anthropic SDK client with prompt caching enabled",
+    "status": "completed",
+    "completed_at": "2026-05-14T15:42:00Z",
+    "summary": "packages/agents/src/client.ts: anthropic() singleton, modelFor(tier) (planning/development/fast → Opus/Sonnet/Haiku), cachedSystemBlock() helper applying cache_control: ephemeral, callJsonAgent() helper, tolerant JSON extractor."
+  },
+  {
+    "id": "prd-006",
+    "title": "Sentry + PostHog wired",
+    "status": "completed",
+    "completed_at": "2026-05-14T15:42:00Z",
+    "summary": "packages/shared/src/observability.ts: captureException, addBreadcrumb, serverPosthog (lazy), captureServerEvent + track helpers. Funnel events typed: visited_landing, started_roast, submitted_email, viewed_result, clicked_upsell, started_checkout, completed_checkout, etc."
+  }
+]

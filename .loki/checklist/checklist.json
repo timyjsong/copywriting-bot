@@ -1,0 +1,343 @@
+{
+  "generated_at": "2026-05-14T15:10:00Z",
+  "source_prd": ".loki/bmad-prd-normalized.md",
+  "categories": [
+    {
+      "id": "phase-0-foundations",
+      "name": "Phase 0 — Foundations (Week 1)",
+      "items": [
+        {
+          "id": "p0-monorepo",
+          "title": "Monorepo scaffold with pnpm workspaces",
+          "description": "Root package.json, pnpm-workspace.yaml, tsconfig.base.json, apps/web, apps/ops, packages/agents, packages/db, packages/shared, packages/inngest",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "package.json" },
+            { "type": "file_exists", "path": "pnpm-workspace.yaml" },
+            { "type": "file_exists", "path": "tsconfig.base.json" },
+            { "type": "file_exists", "path": "apps/web/package.json" },
+            { "type": "file_exists", "path": "apps/ops/package.json" },
+            { "type": "file_exists", "path": "packages/agents/package.json" },
+            { "type": "file_exists", "path": "packages/db/package.json" },
+            { "type": "file_exists", "path": "packages/shared/package.json" },
+            { "type": "file_exists", "path": "packages/inngest/package.json" }
+          ]
+        },
+        {
+          "id": "p0-env-management",
+          "title": "Env management + .env.example with all required vars",
+          "description": "Validated env loader covering Anthropic, Stripe, Supabase, Inngest, Postmark, Smartlead, Apollo, Sentry, PostHog",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": ".env.example" },
+            { "type": "file_exists", "path": "packages/shared/src/env.ts" },
+            { "type": "file_contains", "path": ".env.example", "needle": "ANTHROPIC_API_KEY" },
+            { "type": "file_contains", "path": ".env.example", "needle": "SUPABASE_SERVICE_ROLE_KEY" },
+            { "type": "file_contains", "path": ".env.example", "needle": "STRIPE_WEBHOOK_SECRET" },
+            { "type": "file_contains", "path": ".env.example", "needle": "INNGEST_EVENT_KEY" }
+          ]
+        },
+        {
+          "id": "p0-supabase-schema",
+          "title": "Supabase schema migration covering PRD §5.3 data model",
+          "description": "SQL migration creating customers, sequences, campaigns, send_batches, prospects, performance_snapshots, approvals_queue, events tables",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "packages/db/migrations/0001_init.sql" },
+            { "type": "file_contains", "path": "packages/db/migrations/0001_init.sql", "needle": "create table customers" },
+            { "type": "file_contains", "path": "packages/db/migrations/0001_init.sql", "needle": "create table sequences" },
+            { "type": "file_contains", "path": "packages/db/migrations/0001_init.sql", "needle": "create table campaigns" },
+            { "type": "file_contains", "path": "packages/db/migrations/0001_init.sql", "needle": "create table send_batches" },
+            { "type": "file_contains", "path": "packages/db/migrations/0001_init.sql", "needle": "create table prospects" },
+            { "type": "file_contains", "path": "packages/db/migrations/0001_init.sql", "needle": "create table performance_snapshots" },
+            { "type": "file_contains", "path": "packages/db/migrations/0001_init.sql", "needle": "create table approvals_queue" },
+            { "type": "file_contains", "path": "packages/db/migrations/0001_init.sql", "needle": "create table events" }
+          ]
+        },
+        {
+          "id": "p0-inngest",
+          "title": "Inngest project wiring + basic functions",
+          "description": "Inngest client, /api/inngest route in web app, at least one durable function with operator approval gate primitive",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "packages/inngest/src/client.ts" },
+            { "type": "file_exists", "path": "packages/inngest/src/functions/onboarding.ts" },
+            { "type": "file_exists", "path": "apps/web/app/api/inngest/route.ts" },
+            { "type": "grep_codebase", "needle": "waitForEvent" }
+          ]
+        },
+        {
+          "id": "p0-stripe-webhook",
+          "title": "Stripe test-mode + webhook handler stub",
+          "description": "Stripe Checkout integration scaffold and webhook handler that verifies signature and dispatches Inngest event",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/api/stripe/webhook/route.ts" },
+            { "type": "file_contains", "path": "apps/web/app/api/stripe/webhook/route.ts", "needle": "constructEvent" }
+          ]
+        },
+        {
+          "id": "p0-anthropic-caching",
+          "title": "Anthropic SDK client with prompt caching enabled",
+          "description": "Centralized client with cache_control on system prompts; per-agent factories",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/client.ts" },
+            { "type": "file_contains", "path": "packages/agents/src/client.ts", "needle": "cache_control" }
+          ]
+        },
+        {
+          "id": "p0-observability",
+          "title": "Sentry + PostHog wired",
+          "description": "Sentry init for browser+server, PostHog client+server, helpers in packages/shared",
+          "priority": "major",
+          "checks": [
+            { "type": "file_exists", "path": "packages/shared/src/observability.ts" },
+            { "type": "file_contains", "path": "packages/shared/src/observability.ts", "needle": "Sentry" },
+            { "type": "file_contains", "path": "packages/shared/src/observability.ts", "needle": "posthog" }
+          ]
+        },
+        {
+          "id": "p0-ci",
+          "title": "CI pipeline (typecheck, lint, test, deploy preview)",
+          "description": "GitHub Actions workflow",
+          "priority": "major",
+          "checks": [
+            { "type": "file_exists", "path": ".github/workflows/ci.yml" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-1-free-tool",
+      "name": "Phase 1 — Free Tool + Roast Agent (Week 2)",
+      "items": [
+        {
+          "id": "p1-landing",
+          "title": "Landing page with marketing copy",
+          "description": "Single page hero, value props, free-tool CTA, trust block, ToS/Privacy/Refund links",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/page.tsx" },
+            { "type": "file_exists", "path": "apps/web/app/terms/page.tsx" },
+            { "type": "file_exists", "path": "apps/web/app/privacy/page.tsx" },
+            { "type": "file_exists", "path": "apps/web/app/refund/page.tsx" }
+          ]
+        },
+        {
+          "id": "p1-roast-tool",
+          "title": "Roast My Cold Email tool: paste → score → preview rewrite",
+          "description": "Form page + API endpoint + agent invocation + scored result display + worst-email rewrite preview",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/roast/page.tsx" },
+            { "type": "file_exists", "path": "apps/web/app/api/roast/route.ts" },
+            { "type": "file_exists", "path": "packages/agents/src/roast/agent.ts" }
+          ]
+        },
+        {
+          "id": "p1-email-capture",
+          "title": "Email capture before result reveal",
+          "description": "Email field gating result, customer record created in roasts/leads table",
+          "priority": "critical",
+          "checks": [
+            { "type": "grep_codebase", "needle": "leads" }
+          ]
+        },
+        {
+          "id": "p1-og-badge",
+          "title": "Shareable badge (server-rendered OG image)",
+          "description": "Dynamic OG route generating an image for each roast result",
+          "priority": "major",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/api/og/route.tsx" }
+          ]
+        },
+        {
+          "id": "p1-funnel-tracking",
+          "title": "PostHog funnel tracking",
+          "description": "Events for: visited_landing, started_roast, submitted_email, viewed_result, clicked_upsell, started_checkout, completed_checkout",
+          "priority": "major",
+          "checks": [
+            { "type": "grep_codebase", "needle": "posthog.capture" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-2-paid-flow",
+      "name": "Phase 2 — Paid Flow (Week 3)",
+      "items": [
+        {
+          "id": "p2-checkout",
+          "title": "Stripe Checkout integration ($297 one-time)",
+          "description": "Server action / route handler creating Stripe Checkout Session",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/api/checkout/route.ts" }
+          ]
+        },
+        {
+          "id": "p2-onboarding-wizard",
+          "title": "Onboarding wizard (5 steps)",
+          "description": "Domain, sequence upload, ICP definition, calendar link, brand voice URL",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/onboarding/page.tsx" }
+          ]
+        },
+        {
+          "id": "p2-customer-dashboard",
+          "title": "Customer dashboard skeleton",
+          "description": "Sequence view, send-infra status, performance, pause/resume",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/dashboard/page.tsx" }
+          ]
+        },
+        {
+          "id": "p2-rewrite-agent",
+          "title": "Rewrite Agent v1 (Sonnet 4.6)",
+          "description": "Full sequence rewrite using SaaS-to-SaaS playbook + brand voice + ICP",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/rewrite/agent.ts" }
+          ]
+        },
+        {
+          "id": "p2-ops-dashboard",
+          "title": "Operator dashboard skeleton + approval queue",
+          "description": "Customer list, approval queue, one-click approve/reject/edit",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "apps/ops/app/page.tsx" },
+            { "type": "file_exists", "path": "apps/ops/app/approvals/page.tsx" }
+          ]
+        },
+        {
+          "id": "p2-approval-flow",
+          "title": "Approval gate flow end-to-end (Inngest waitForEvent)",
+          "description": "Operator clicks approve/reject → emits Inngest event → durable function resumes",
+          "priority": "critical",
+          "checks": [
+            { "type": "grep_codebase", "needle": "operator.approval" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-3-send-infra",
+      "name": "Phase 3 — Send Infrastructure (Week 4)",
+      "items": [
+        {
+          "id": "p3-smartlead",
+          "title": "Smartlead API integration",
+          "description": "Workspace-per-customer provisioning, warmup config, daily caps",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/send-infra/smartlead.ts" }
+          ]
+        },
+        {
+          "id": "p3-send-infra-agent",
+          "title": "Send Infra Agent (daily batch generation)",
+          "description": "Generates per-prospect personalization batches; queues for approval",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/send-infra/agent.ts" }
+          ]
+        },
+        {
+          "id": "p3-dns-verify",
+          "title": "Domain DNS verification flow",
+          "description": "Customer domain SPF/DKIM/DMARC check before campaign activation",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/send-infra/dns.ts" }
+          ]
+        },
+        {
+          "id": "p3-performance-monitor",
+          "title": "Performance Monitor Agent (Smartlead metrics → dashboard)",
+          "description": "Daily cron, pulls metrics, computes uplift, triggers 21-day milestone",
+          "priority": "critical",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/performance-monitor/agent.ts" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-4-outbound",
+      "name": "Phase 4 — Bot's Own Outbound (Week 5)",
+      "items": [
+        {
+          "id": "p4-apollo",
+          "title": "Apollo/Clay integration for prospect enrichment",
+          "description": "Prospect sourcing client + queue",
+          "priority": "major",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/outbound/apollo.ts" }
+          ]
+        },
+        {
+          "id": "p4-outbound-agent",
+          "title": "Outbound Agent (sources, personalizes, queues for approval)",
+          "description": "Sonnet 4.6 generates personalized cold emails using bot's playbook",
+          "priority": "major",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/outbound/agent.ts" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-5-seo",
+      "name": "Phase 5 — Programmatic SEO seed (Week 6)",
+      "items": [
+        {
+          "id": "p5-seo-pages",
+          "title": "Template-driven page generator",
+          "description": "Dynamic content per long-tail keyword + sitemap",
+          "priority": "minor",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/(seo)/[slug]/page.tsx" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-6-polish",
+      "name": "Phase 6 — Polish & launch (Week 7)",
+      "items": [
+        {
+          "id": "p6-refund",
+          "title": "Refund flow (Stripe + operator approval)",
+          "description": "Refund route + operator queue entry",
+          "priority": "major",
+          "checks": [
+            { "type": "file_exists", "path": "apps/web/app/api/refund/route.ts" }
+          ]
+        },
+        {
+          "id": "p6-support-agent",
+          "title": "Support/Replier Agent",
+          "description": "Triage inbound, draft reply, route to operator approval",
+          "priority": "major",
+          "checks": [
+            { "type": "file_exists", "path": "packages/agents/src/support/agent.ts" }
+          ]
+        },
+        {
+          "id": "p6-21day-milestone",
+          "title": "21-day milestone trigger logic",
+          "description": "Cron / scheduled function fires free rewrite when uplift target missed",
+          "priority": "major",
+          "checks": [
+            { "type": "grep_codebase", "needle": "21-day" }
+          ]
+        }
+      ]
+    }
+  ]
+}

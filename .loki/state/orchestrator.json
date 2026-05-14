@@ -1,0 +1,19 @@
+{
+    "version": "7.5.17",
+    "currentPhase": "PHASE_1_FREE_TOOL",
+    "startedAt": "2026-05-14T15:05:20Z",
+    "lastUpdatedAt": "2026-05-14T15:42:00Z",
+    "agents": {},
+    "metrics": {
+        "tasksCompleted": 7,
+        "tasksFailed": 0,
+        "retries": 0
+    },
+    "phaseHistory": [
+        {
+            "phase": "BOOTSTRAP",
+            "completed_at": "2026-05-14T15:42:00Z",
+            "notes": "Monorepo scaffolded; Phase 0 foundations + Phase 1 free tool + initial paid flow / send-infra / outbound agents shipped in iteration 1."
+        }
+    ]
+}
