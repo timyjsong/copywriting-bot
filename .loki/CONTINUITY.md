@@ -1,75 +1,82 @@
 # Session Continuity
 
-Updated: 2026-05-14T17:50:00Z
+Updated: 2026-05-14T17:58:30Z
 
 ## Current State
 
-- Iteration: 12
-- Phase: PHASE_2_PAID_FLOW
-- RARV Step: VERIFY
+- Iteration: 13
+- Phase: PHASE_2_PAID_FLOW / PHASE_6_POLISH
+- RARV Step: VERIFY (passing)
 - Provider: claude
-- Elapsed: 2h 45m
+- Elapsed: 2h 53m
 
 ## Last Completed Task
 
-- Iter 12: fix apply-decision DB error swallowing in onboarding + sendBatch
-  pipelines (real production bug from iter 9 Low finding); add mockReset
-  + step-ID uniqueness coverage across all three durable functions.
-- Files changed: packages/inngest/src/functions/onboarding.ts (apply-decision
-  now checks {error} on both approvals_queue + sequences updates),
-  packages/inngest/src/functions/sendBatch.ts (same fix for send_batches +
-  approvals_queue updates), packages/inngest/src/test-utils/supabase-fake.ts
-  (TableConfig.update accepts function-form for per-call dispatch + export
-  assertUniqueStepIds), packages/inngest/src/functions/funnel-events-edge.test.ts
-  (+7 tests: 3 apply-decision DB-error tests, mockReset migration in all 3
-  beforeEach blocks, step-ID uniqueness assertions across happy paths +
-  timeout path).
-- Tests: 310 passing (+7 from iter 11's 303). Typecheck green.
+- Iter 13: extended iter-12's silent-DB-error fix + DI seam to refund.ts +
+  support.ts (the two remaining apply-decision step bodies that swallowed
+  update errors).
+- Added `runRefundRequested` + `runSupportReplyPipeline` exports following
+  the established Ctx-port pattern (matches `runOnboardingPipeline` /
+  `runSendBatchGenerate` from iter 10) so both pipelines are now unit-testable
+  without `vi.mock` on the Supabase client.
+- Tightened supabase-fake: `.insert().select().single()` now records the
+  inserted values onto `recorded.insert[table]` (previously only the
+  `.then`-resolved variant did, which silently skipped recording for the
+  most common Postgrest insert shape). Guarded via the existing `recorded_once`
+  flag so a double-await still records once.
+- 17 new tests cover: timeout-no-write, create-approval insert error,
+  approve+reject paths, dual-table apply-decision (refund: approvals_queue
+  + customers), DB-error throws on both update paths, null-notes pass-through,
+  triage-spam short-circuit, triage agent error throws, support insert payload
+  shape, and the waitForEvent timeout/filter contract for both pipelines.
+- Files changed:
+  - packages/inngest/src/functions/refund.ts
+  - packages/inngest/src/functions/support.ts
+  - packages/inngest/src/functions/approval-gates.test.ts (new, +17 tests)
+  - packages/inngest/src/test-utils/supabase-fake.ts (single() records inserts)
+  - .loki/CONTINUITY.md
+
+## Verification
+
+- `pnpm -r typecheck` → all workspaces clean
+- `pnpm -r build` → web + ops build through
+- `pnpm -r test` → inngest now 84 (+17 in approval-gates.test.ts)
 
 ## Active Blockers
 
-- None. Lint was already broken pre-existing (Next.js ESLint interactive
-  setup prompt blocks `pnpm lint` in non-interactive mode); not introduced
-  by iter 12.
+- None
 
 ## Next Up
 
-- PostHog funnel tracking (already wired in iter 3+6; verify checklist
-  marks `p1-funnel-tracking` as green next iter).
-- Phase 3 (Send Infrastructure) prep: deepen Smartlead integration,
-  Performance Monitor cron payload, DNS verify flow.
-- Refactor: lift `FunnelStep` to a real abstraction or drop the
-  structural fragment (iter 9 arch-strategist Low).
+- PostHog funnel tracking (wired in iter 6; verify coverage of
+  rewrite_approved + sequence_activated + performance_report_sent edge cases
+  if reviewer flags gaps)
+- **Ship to production. This goes live before anything else.** (deployment
+  scaffolding — Vercel domain, secrets, Inngest Cloud connection)
+- Stripe Checkout integration ($297 one-time) — checkout endpoints exist;
+  needs production Stripe key wiring + webhook signature verification audit
 
 ## Key Decisions This Session
 
-- Iter 12: treat apply-decision DB write errors as RETRYABLE via
-  Inngest step-level retry (≤3 attempts w/ exponential backoff) rather
-  than swallowing them. A silent failure here would leave the row in
-  pending_approval while the function reports success and the downstream
-  funnel event (`rewrite_approved` / `sequence_activated`) would still
-  fire — masking a stuck queue. The throw surfaces the failure in the
-  Inngest run viewer where operator can investigate.
-- Iter 12: extended supabase-fake TableConfig.update to accept either an
-  object or `(values) => result` function form. This lets tests
-  differentiate between intermediate writes (create-approval) and
-  final writes (apply-decision) on the same table without re-architecting
-  the fake. Backward compatible: object-form callers unchanged.
+- Iter 13: When iter-12 fixed silent DB-error swallow in onboarding/sendBatch
+  apply-decision, the same anti-pattern existed in refund + support — two
+  parallel approval-gate pipelines. Rather than wait for a reviewer to flag
+  it, applied the same fix proactively and added the corresponding DI seam
+  so all four approval-gate functions now share a single testable structure.
+- Iter 13: Fixed a real test-fidelity gap in supabase-fake (.single() not
+  recording inserts) — surfaced by writing a payload-shape assertion. The
+  fix uses the existing `recorded_once` guard so double-await still records
+  once.
 
 ## Mistakes & Learnings
 
-- (carry-over from iter 9-11) When extracting "pure" helpers from a
-  durable function, complete the DI seam: don't just rename the call to
-  serviceClient() — accept `db` via ctx so tests can inject a fake
-  without `vi.mock("@copywriting-bot/db/client")` at module level. Iter
-  10 closed this for onboarding/sendBatch/performance; future Phase 3
-  functions should ship the seam from day one.
-- (carry-over) `Number.parseInt(s, 10)` accepts trailing garbage
-  ("123abc" → 123). For IDs / numeric identifiers always parse with
-  strict `/^\d+$/` regex + safe-integer bound. See
-  parseSmartleadCampaignId in performance.ts.
-- New iter 12: Supabase fake's update config is now value-aware. When
-  a test needs to differentiate two updates to the same table, prefer
-  the function-form `update: (values) => result` over re-wiring fakes.
-  Avoid making this a stateful sequence (mock queue) — that would be
-  another foot-gun.
+- (iter 13) Wrote initial test against `recorded.insert.approvals_queue[0]`
+  without realising the fake's `.single()` path bypassed the recording branch.
+  Caught by the test failing as `[]`. Lesson: when adding new assertion shapes
+  to an existing fake, audit every chain shape the fake supports — not just
+  the one the existing tests happen to exercise.
+- (iter 13) Initially missed `noUncheckedIndexedAccess: true` when writing
+  index accesses against `Record<string, RecordedWrite[]>` in tests — surfaces
+  as 12 TS errors at typecheck, not at test time. Lesson: write recorded-table
+  lookups with `!` postfix (or extract to a typed local variable) from the
+  start, since `pnpm -r typecheck` is the gate that catches this.

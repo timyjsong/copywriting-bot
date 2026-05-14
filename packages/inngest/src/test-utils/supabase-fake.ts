@@ -141,7 +141,18 @@ export function makeSupabaseFake(tables: Record<string, TableConfig>): SupabaseF
       return builder;
     });
     builder.single = vi.fn(async () => {
-      if (mode === "insert") return cfg.insert ?? { data: null, error: null };
+      // `single()` short-circuits the `.then` chain, so we record the
+      // write here too. Without this, the common
+      // `.insert(v).select().single()` shape would silently skip insert
+      // recording — a test relying on `recorded.insert[t]` to assert
+      // payload content would falsely see zero writes.
+      if (mode === "insert") {
+        if (!recorded_once) {
+          (recorded.insert[table] ??= []).push({ values: pendingValues ?? {}, eqArgs, neqArgs });
+          recorded_once = true;
+        }
+        return cfg.insert ?? { data: null, error: null };
+      }
       return cfg.select ?? { data: null, error: null };
     });
     builder.then = (resolve: (v: unknown) => unknown) => {
