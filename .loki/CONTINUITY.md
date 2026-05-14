@@ -1,23 +1,27 @@
 # Session Continuity
 
-Updated: 2026-05-14T12:44:00Z
+Updated: 2026-05-14T12:53:00Z
 
 ## Current State
 
-- Iteration: 5
+- Iteration: 5 (committed b1d2d0b + fa4682a + f767641)
 - Phase: PHASE_2_PAID_FLOW
 - RARV Step: VERIFY (green)
 - Provider: claude
-- Elapsed: ~2h
+- Elapsed: ~2.5h
 
 ## Last Completed Task
 
 - Loki iter 5: massive test coverage expansion across all agents + ops + boundary routes
-- Tests: 112 → 199 (+87 new)
-- New test files: 11 across rewrite, roast, brand-voice, outbound (+ apollo), support,
-  send-infra (agent + dns), apps/ops /api/refund, apps/ops /api/approvals/[id],
-  apps/web /api/checkout, apps/web /api/stripe/webhook
-- apps/ops now has a vitest config + test runner (was 'echo no tests yet')
+- Tests: 112 → 243 (+131 new across 5b/5c follow-ups)
+- New test files (13 total this iteration):
+  - packages/agents: rewrite, roast, brand-voice, outbound, apollo, support,
+    send-infra (agent), send-infra (dns)
+  - apps/ops: /api/refund, /api/approvals/[id] (new vitest setup)
+  - apps/web: /api/checkout, /api/stripe/webhook, dashboard/helpers
+  - packages/shared: env.ts validation
+- Refactor: extracted apps/web/app/dashboard helpers into ./helpers.ts (testable
+  sibling module — mirrors the iter-3 ApprovalSummary extraction pattern).
 
 ## Active Blockers
 
