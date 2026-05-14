@@ -1,7 +1,8 @@
 import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
-import { emitFunnelEvent, type FunnelStep } from "./_funnel.js";
+import { emitFunnelEvent } from "./_funnel.js";
 import type { DbPort } from "./_db.js";
+import { withOperatorApproval, type ApprovalStep } from "./_approval-gate.js";
 
 /**
  * sendBatchGenerate — when an approved sequence's campaign needs a daily
@@ -17,12 +18,7 @@ import type { DbPort } from "./_db.js";
 
 export type SendBatchCtx = {
   event: { data: { campaign_id: string; batch_date: string } };
-  step: FunnelStep & {
-    waitForEvent: (
-      id: string,
-      opts: { event: string; timeout: string; if: string },
-    ) => Promise<{ data: { decision: string; notes?: string | null } } | null>;
-  };
+  step: ApprovalStep;
   db?: DbPort;
 };
 
@@ -64,56 +60,34 @@ export async function runSendBatchGenerate({ event, step, db: dbOverride }: Send
     return data.id;
   });
 
-  const approvalId = await step.run("create-approval", async () => {
-    const { data, error } = await db
-      .from("approvals_queue")
-      .insert({
-        type: "send_batch",
-        entity_id: batchId,
-        customer_id: campaign.customer_id,
-        payload_json: { campaign_id: campaign.id, batch_date, daily_cap: campaign.daily_cap } as unknown as object,
-        status: "pending",
-      })
-      .select("id")
-      .single();
-    if (error || !data) throw error ?? new Error("Could not create approval");
-    return data.id;
-  });
-
-  const decision = await step.waitForEvent("await-operator-approval", {
-    event: "operator.approval",
+  const outcome = await withOperatorApproval({
+    step,
+    db,
+    type: "send_batch",
+    entityId: batchId,
+    customerId: campaign.customer_id,
+    payloadJson: { campaign_id: campaign.id, batch_date, daily_cap: campaign.daily_cap },
     timeout: "2d",
-    if: `async.data.id == "${approvalId}"`,
+    onDecision: async ({ approved }) => {
+      const { error: batchErr } = await db
+        .from("send_batches")
+        .update({
+          status: approved ? "approved" : "rejected",
+          approved_at: new Date().toISOString(),
+        })
+        .eq("id", batchId);
+      if (batchErr) throw batchErr;
+    },
   });
 
-  if (!decision) {
+  if (outcome.kind === "timeout") {
     await step.run("mark-batch-failed", async () => {
       await db.from("send_batches").update({ status: "failed" }).eq("id", batchId);
     });
     return { status: "timeout", batchId };
   }
 
-  // Re-throw on DB error so Inngest retries this step (≤3 attempts w/
-  // exponential backoff). Silent failure would leave the batch in
-  // pending_approval while the function reports success and `sequence_activated`
-  // would still fire — masking a stuck queue.
-  await step.run("apply-decision", async () => {
-    const finalStatus = decision.data.decision === "reject" ? "rejected" : "approved";
-    const { error: batchErr } = await db.from("send_batches").update({
-      status: finalStatus,
-      approved_at: new Date().toISOString(),
-    }).eq("id", batchId);
-    if (batchErr) throw batchErr;
-    const { error: approvalErr } = await db.from("approvals_queue").update({
-      status: finalStatus === "rejected" ? "rejected" : "approved",
-      operator_action: decision.data.decision,
-      operator_notes: decision.data.notes ?? null,
-      decided_at: new Date().toISOString(),
-    }).eq("id", approvalId);
-    if (approvalErr) throw approvalErr;
-  });
-
-  if (decision.data.decision !== "reject") {
+  if (outcome.approved) {
     const isFirstApproved = await step.run("count-prior-approved-batches", async () => {
       const { count, error } = await db
         .from("send_batches")
@@ -144,7 +118,11 @@ export async function runSendBatchGenerate({ event, step, db: dbOverride }: Send
     }
   }
 
-  return { status: decision.data.decision, batchId, approvalId };
+  return {
+    status: outcome.decision.decision,
+    batchId,
+    approvalId: outcome.approvalId,
+  };
 }
 
 export const sendBatchGenerate = inngest.createFunction(
@@ -153,6 +131,6 @@ export const sendBatchGenerate = inngest.createFunction(
   async ({ event, step }) =>
     runSendBatchGenerate({
       event: event as SendBatchCtx["event"],
-      step: step as unknown as SendBatchCtx["step"],
+      step: step as unknown as ApprovalStep,
     }),
 );

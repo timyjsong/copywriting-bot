@@ -1,8 +1,9 @@
 import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { rewrite, brandVoice } from "@copywriting-bot/agents";
-import { emitFunnelEvent, type FunnelStep } from "./_funnel.js";
+import { emitFunnelEvent } from "./_funnel.js";
 import type { DbPort } from "./_db.js";
+import { withOperatorApproval, type ApprovalStep } from "./_approval-gate.js";
 
 /**
  * onboardingPipeline — durable workflow that runs after a customer completes
@@ -19,12 +20,7 @@ import type { DbPort } from "./_db.js";
 
 export type OnboardingPipelineCtx = {
   event: { data: { customer_id: string; sequence_id: string } };
-  step: FunnelStep & {
-    waitForEvent: (
-      id: string,
-      opts: { event: string; timeout: string; if: string },
-    ) => Promise<{ data: { decision: string; notes?: string | null } } | null>;
-  };
+  step: ApprovalStep;
   db?: DbPort;
 };
 
@@ -74,8 +70,8 @@ export async function runOnboardingPipeline({ event, step, db: dbOverride }: Onb
     throw new Error(`Rewrite Agent failed: ${rewriteOutcome.error}`);
   }
 
-  // Step 3: persist rewrite + create approval queue item
-  const approvalId = await step.run("create-approval", async () => {
+  // Step 3: persist rewritten text before queueing the operator gate.
+  await step.run("persist-rewrite", async () => {
     const rewrittenText = rewriteOutcome.result.emails
       .map((e) => `Step ${e.step} (Day ${e.send_delay_days}) [${e.purpose}]\nSubject: ${e.subject}\n\n${e.body}`)
       .join("\n\n---\n\n");
@@ -85,66 +81,49 @@ export async function runOnboardingPipeline({ event, step, db: dbOverride }: Onb
       .update({ rewritten_text: rewrittenText, status: "pending_approval" })
       .eq("id", sequence_id);
     if (updateErr) throw updateErr;
-
-    const { data: approval, error: insErr } = await db
-      .from("approvals_queue")
-      .insert({
-        type: "rewrite",
-        entity_id: sequence_id,
-        customer_id,
-        payload_json: rewriteOutcome.result as unknown as object,
-        status: "pending",
-      })
-      .select("id")
-      .single();
-    if (insErr) throw insErr;
-    return approval.id;
   });
 
-  // Step 4: wait for operator approval (PRD-mandated gate, §5.2)
-  const decision = await step.waitForEvent("await-operator-approval", {
-    event: "operator.approval",
+  // Step 4–5: approval gate primitive (PRD §5.2). On decision, persist the
+  // sequences row alongside the approvals_queue write so a partial failure
+  // can't leave the two out of sync.
+  const outcome = await withOperatorApproval({
+    step,
+    db,
+    type: "rewrite",
+    entityId: sequence_id,
+    customerId: customer_id,
+    payloadJson: rewriteOutcome.result as unknown as object,
     timeout: "7d",
-    if: `async.data.id == "${approvalId}"`,
+    onDecision: async ({ approved }) => {
+      const { error: seqErr } = await db
+        .from("sequences")
+        .update({
+          status: approved ? "approved" : "rejected",
+          approved_at: new Date().toISOString(),
+        })
+        .eq("id", sequence_id);
+      if (seqErr) throw seqErr;
+    },
   });
 
-  if (!decision) {
-    // Timed out — escalate to operator via support agent
-    return { status: "timeout", approvalId };
+  if (outcome.kind === "timeout") {
+    return { status: "timeout", approvalId: outcome.approvalId };
   }
 
-  // Step 5: persist decision. Re-throw on DB error so Inngest retries this
-  // step (≤3 attempts w/ exponential backoff). A silent DB failure here would
-  // leave the row in `pending_approval` while the function reports success
-  // and the downstream funnel event would still fire — masking a stuck queue.
-  await step.run("apply-decision", async () => {
-    const status = decision.data.decision === "reject" ? "rejected" : "approved";
-    const { error: approvalErr } = await db
-      .from("approvals_queue")
-      .update({
-        status: decision.data.decision === "reject" ? "rejected" : "approved",
-        operator_action: decision.data.decision,
-        operator_notes: decision.data.notes ?? null,
-        decided_at: new Date().toISOString(),
-      })
-      .eq("id", approvalId);
-    if (approvalErr) throw approvalErr;
-    const { error: seqErr } = await db
-      .from("sequences")
-      .update({ status, approved_at: new Date().toISOString() })
-      .eq("id", sequence_id);
-    if (seqErr) throw seqErr;
-  });
-
-  if (decision.data.decision !== "reject") {
+  if (outcome.approved) {
     await emitFunnelEvent(step, "emit-rewrite-approved-funnel", customer_id, "rewrite_approved", {
       sequence_id,
-      approval_id: approvalId,
-      decision: decision.data.decision,
+      approval_id: outcome.approvalId,
+      decision: outcome.decision.decision,
     });
   }
 
-  return { status: decision.data.decision, approvalId, customer_id, sequence_id };
+  return {
+    status: outcome.decision.decision,
+    approvalId: outcome.approvalId,
+    customer_id,
+    sequence_id,
+  };
 }
 
 export const onboardingPipeline = inngest.createFunction(
@@ -153,6 +132,6 @@ export const onboardingPipeline = inngest.createFunction(
   async ({ event, step }) =>
     runOnboardingPipeline({
       event: event as OnboardingPipelineCtx["event"],
-      step: step as unknown as OnboardingPipelineCtx["step"],
+      step: step as unknown as ApprovalStep,
     }),
 );

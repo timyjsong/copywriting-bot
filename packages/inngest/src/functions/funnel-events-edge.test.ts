@@ -264,13 +264,22 @@ describe("sendBatchGenerate — error paths + edge cases", () => {
     // the function reports success and sequence_activated would still fire.
     // The throw makes Inngest retry the step (≤3 attempts) and surfaces the
     // stuck-queue case in the Inngest run viewer.
+    //
+    // Ordering inside the apply-decision step (iter 14 `withOperatorApproval`):
+    //   1. approvals_queue.update — succeeds first (helper owns it).
+    //   2. onDecision side-effect → send_batches.update — throws here.
+    // Inngest retries the whole step; both writes are idempotent (status
+    // transitions to the same terminal value).
     const fake = wire({
       campaigns: { select: { data: baseCampaign, error: null } },
       send_batches: {
         insert: { data: { id: "batch-1" }, error: null },
         update: { data: null, error: new Error("batch update conflict") },
       },
-      approvals_queue: { insert: { data: { id: "approval-1" }, error: null } },
+      approvals_queue: {
+        insert: { data: { id: "approval-1" }, error: null },
+        update: { data: null, error: null },
+      },
     });
     const { step } = makeStep({ data: { decision: "approve", notes: null } });
 
@@ -283,8 +292,13 @@ describe("sendBatchGenerate — error paths + edge cases", () => {
     ).rejects.toThrow(/batch update conflict/);
     // Apply-decision threw before the funnel emit could run.
     expect(captureServerEventMock).not.toHaveBeenCalled();
-    // approvals_queue update never ran because send_batches update threw first.
-    expect(fake.recorded.update.approvals_queue ?? []).toEqual([]);
+    // approvals_queue.update ran (and succeeded) before the throw; the throw
+    // came from the downstream send_batches.update inside onDecision.
+    expect(fake.recorded.update.approvals_queue ?? []).toHaveLength(1);
+    expect(fake.recorded.update.approvals_queue![0]!.values).toMatchObject({
+      status: "approved",
+      operator_action: "approve",
+    });
   });
 
   it("THROWS when apply-decision approvals_queue update returns an error", async () => {

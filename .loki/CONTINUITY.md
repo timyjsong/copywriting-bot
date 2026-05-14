@@ -1,82 +1,63 @@
 # Session Continuity
 
-Updated: 2026-05-14T17:58:30Z
+Updated: 2026-05-14T18:13:00Z
 
 ## Current State
 
-- Iteration: 13
-- Phase: PHASE_2_PAID_FLOW / PHASE_6_POLISH
-- RARV Step: VERIFY (passing)
+- Iteration: 14
+- Phase: PHASE_2_PAID_FLOW
+- RARV Step: VERIFY → COMMIT
 - Provider: claude
-- Elapsed: 2h 53m
+- Elapsed: 3h 08m
 
 ## Last Completed Task
 
-- Iter 13: extended iter-12's silent-DB-error fix + DI seam to refund.ts +
-  support.ts (the two remaining apply-decision step bodies that swallowed
-  update errors).
-- Added `runRefundRequested` + `runSupportReplyPipeline` exports following
-  the established Ctx-port pattern (matches `runOnboardingPipeline` /
-  `runSendBatchGenerate` from iter 10) so both pipelines are now unit-testable
-  without `vi.mock` on the Supabase client.
-- Tightened supabase-fake: `.insert().select().single()` now records the
-  inserted values onto `recorded.insert[table]` (previously only the
-  `.then`-resolved variant did, which silently skipped recording for the
-  most common Postgrest insert shape). Guarded via the existing `recorded_once`
-  flag so a double-await still records once.
-- 17 new tests cover: timeout-no-write, create-approval insert error,
-  approve+reject paths, dual-table apply-decision (refund: approvals_queue
-  + customers), DB-error throws on both update paths, null-notes pass-through,
-  triage-spam short-circuit, triage agent error throws, support insert payload
-  shape, and the waitForEvent timeout/filter contract for both pipelines.
-- Files changed:
-  - packages/inngest/src/functions/refund.ts
-  - packages/inngest/src/functions/support.ts
-  - packages/inngest/src/functions/approval-gates.test.ts (new, +17 tests)
-  - packages/inngest/src/test-utils/supabase-fake.ts (single() records inserts)
-  - .loki/CONTINUITY.md
-
-## Verification
-
-- `pnpm -r typecheck` → all workspaces clean
-- `pnpm -r build` → web + ops build through
-- `pnpm -r test` → inngest now 84 (+17 in approval-gates.test.ts)
+- Iter 14: extract `withOperatorApproval` primitive — folded the 4-place
+  duplicated `create-approval → waitForEvent → apply-decision` shape
+  (onboarding, sendBatch, refund, support) into a single helper at
+  `packages/inngest/src/functions/_approval-gate.ts`. Addresses the HIGH
+  architecture finding from iter 13. Domain side-effects now pass through
+  the helper's `onDecision({ approved })` hook so retry, error-rethrow,
+  and step-ID discipline are enforced in one place.
+- Also closed iter-13 test-coverage gaps: payload-shape assertion for
+  refund, ISO-8601 `decided_at` pin, non-`"reject"` decision routing
+  pinned on refund + support, `runSupportAgent` args + `?? ""` / `?? false`
+  default fallback pins, idempotency-on-retry test, cross-describe-block
+  isolation for `runSupportAgentMock`, targeted unit test on the
+  supabase-fake `.single()` recording fix.
+- 351 tests passing (up from 327). Typecheck clean.
 
 ## Active Blockers
 
-- None
+- None.
+- Note: `pnpm lint` blocks on Next.js 16 `next lint` deprecation interactive
+  prompt in `apps/web` + `apps/ops`. Pre-existing, unrelated to iter 14.
+  Package-level lint clean.
 
 ## Next Up
 
-- PostHog funnel tracking (wired in iter 6; verify coverage of
-  rewrite_approved + sequence_activated + performance_report_sent edge cases
-  if reviewer flags gaps)
-- **Ship to production. This goes live before anything else.** (deployment
-  scaffolding — Vercel domain, secrets, Inngest Cloud connection)
-- Stripe Checkout integration ($297 one-time) — checkout endpoints exist;
-  needs production Stripe key wiring + webhook signature verification audit
-
-## Key Decisions This Session
-
-- Iter 13: When iter-12 fixed silent DB-error swallow in onboarding/sendBatch
-  apply-decision, the same anti-pattern existed in refund + support — two
-  parallel approval-gate pipelines. Rather than wait for a reviewer to flag
-  it, applied the same fix proactively and added the corresponding DI seam
-  so all four approval-gate functions now share a single testable structure.
-- Iter 13: Fixed a real test-fidelity gap in supabase-fake (.single() not
-  recording inserts) — surfaced by writing a payload-shape assertion. The
-  fix uses the existing `recorded_once` guard so double-await still records
-  once.
+- PostHog funnel tracking (already partially wired via `emitFunnelEvent`)
+- Production deploy hardening
+- Stripe Checkout integration ($297 one-time) — partially scaffolded in iter 2
 
 ## Mistakes & Learnings
 
-- (iter 13) Wrote initial test against `recorded.insert.approvals_queue[0]`
-  without realising the fake's `.single()` path bypassed the recording branch.
-  Caught by the test failing as `[]`. Lesson: when adding new assertion shapes
-  to an existing fake, audit every chain shape the fake supports — not just
-  the one the existing tests happen to exercise.
-- (iter 13) Initially missed `noUncheckedIndexedAccess: true` when writing
-  index accesses against `Record<string, RecordedWrite[]>` in tests — surfaces
-  as 12 TS errors at typecheck, not at test time. Lesson: write recorded-table
-  lookups with `!` postfix (or extract to a typed local variable) from the
-  start, since `pnpm -r typecheck` is the gate that catches this.
+- **Discriminated-union narrowing requires a non-overlapping discriminator.**
+  Initial `ApprovalOutcome` used `status: "timeout" | string` — TS could not
+  narrow on `outcome.status === "timeout"` because the decided-branch's
+  widened `string` includes the literal `"timeout"`. Fix: switched to a
+  `kind: "timeout" | "decided"` discriminator. Apply this rule whenever a
+  union branches on a string field that may legitimately take any value.
+- **Ordering matters in apply-decision.** Iter 14 flipped the order so
+  `approvals_queue.update` runs before the domain side-effect inside
+  `onDecision`. Both are idempotent under Inngest retry; the new order is
+  consistent with refund (which already had this ordering pre-refactor)
+  and pins "decision recorded" as the source of truth.
+
+## Key Decisions This Session
+
+- Adopted `withOperatorApproval(args)` as the single approval-gate
+  primitive across all 4 pipelines; callers pass `onDecision` for
+  domain-specific side-effects.
+- `kind: "timeout" | "decided"` discriminator on `ApprovalOutcome` — chosen
+  over `status` because the decided-branch `status` is widened to `string`.

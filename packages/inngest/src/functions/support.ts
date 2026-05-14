@@ -2,6 +2,7 @@ import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { support } from "@copywriting-bot/agents";
 import type { DbPort } from "./_db.js";
+import { withOperatorApproval, type ApprovalStep } from "./_approval-gate.js";
 
 /**
  * supportReplyPipeline — inbound customer email → triage → operator approval.
@@ -20,13 +21,7 @@ export type SupportReplyCtx = {
       twenty_one_day_metric_missed?: boolean;
     };
   };
-  step: {
-    run: <T>(id: string, fn: () => Promise<T>) => Promise<T>;
-    waitForEvent: (
-      id: string,
-      opts: { event: string; timeout: string; if: string },
-    ) => Promise<{ data: { decision: string; notes?: string | null } } | null>;
-  };
+  step: ApprovalStep;
   db?: DbPort;
 };
 
@@ -50,49 +45,22 @@ export async function runSupportReplyPipeline({ event, step, db: dbOverride }: S
     return { status: "spam_filtered" };
   }
 
-  const approvalId = await step.run("create-approval", async () => {
-    const { data, error } = await db
-      .from("approvals_queue")
-      .insert({
-        type: "support_reply",
-        entity_id: customer_email,
-        payload_json: {
-          triage,
-          inbound: { subject, body, recent_thread },
-        } as unknown as object,
-        status: "pending",
-      })
-      .select("id")
-      .single();
-    if (error || !data) throw error ?? new Error("Could not create support approval");
-    return data.id;
-  });
-
-  const decision = await step.waitForEvent("await-operator-approval", {
-    event: "operator.approval",
+  const outcome = await withOperatorApproval({
+    step,
+    db,
+    type: "support_reply",
+    entityId: customer_email,
+    payloadJson: {
+      triage,
+      inbound: { subject, body, recent_thread },
+    },
     timeout: "3d",
-    if: `async.data.id == "${approvalId}"`,
   });
 
-  if (!decision) return { status: "timeout", approvalId };
-
-  // Re-throw on DB error so Inngest retries this step (≤3 attempts w/
-  // exponential backoff). Silent failure would leave the approval row in
-  // 'pending' while the function reports success, masking a stuck queue.
-  await step.run("apply-decision", async () => {
-    const { error } = await db
-      .from("approvals_queue")
-      .update({
-        status: decision.data.decision === "reject" ? "rejected" : "approved",
-        operator_action: decision.data.decision,
-        operator_notes: decision.data.notes ?? null,
-        decided_at: new Date().toISOString(),
-      })
-      .eq("id", approvalId);
-    if (error) throw error;
-  });
-
-  return { status: decision.data.decision, approvalId, category: triage.category };
+  if (outcome.kind === "timeout") {
+    return { status: "timeout", approvalId: outcome.approvalId };
+  }
+  return { status: outcome.status, approvalId: outcome.approvalId, category: triage.category };
 }
 
 export const supportReplyPipeline = inngest.createFunction(
@@ -101,6 +69,6 @@ export const supportReplyPipeline = inngest.createFunction(
   async ({ event, step }) =>
     runSupportReplyPipeline({
       event: event as SupportReplyCtx["event"],
-      step: step as unknown as SupportReplyCtx["step"],
+      step: step as unknown as ApprovalStep,
     }),
 );

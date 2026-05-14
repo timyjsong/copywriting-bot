@@ -12,6 +12,15 @@ vi.mock("@copywriting-bot/agents", () => ({
 // take `db` via their ctx so tests inject the fake directly (DI seam from
 // iter 10).
 
+// File-level reset so `runSupportAgentMock` cannot leak across describe
+// blocks. Iter 13 finding: hoisted mocks shared across describes are
+// exactly the foot-gun that bit iter 9. Resetting in every block's
+// beforeEach instead of file-level made cross-describe-block isolation
+// depend on test ordering.
+beforeEach(() => {
+  runSupportAgentMock.mockReset();
+});
+
 import { runRefundRequested } from "./refund.js";
 import { runSupportReplyPipeline } from "./support.js";
 import {
@@ -201,6 +210,149 @@ describe("runRefundRequested — approval gate + DB error surfacing", () => {
         if: `async.data.id == "appr-7"`,
       },
     );
+  });
+
+  // Iter 13 gap-coverage: pin the approvals_queue insert PAYLOAD for refund
+  // (the support describe has the symmetric assertion; refund didn't, so a
+  // regression that swapped fields or dropped payload_json would slip past).
+  it("approval-queue insert carries refund payload (type, entity_id, customer_id, payload_json{amount,currency,reason})", async () => {
+    const fake = wire({
+      approvals_queue: {
+        insert: { data: { id: "appr-payload" }, error: null },
+        update: { error: null },
+      },
+      customers: { update: { error: null } },
+    });
+    const { step } = makeStep({ data: { decision: "approve" } });
+
+    await runRefundRequested({
+      event: {
+        data: {
+          customer_id: "cust-payload",
+          stripe_charge_id: "ch_payload",
+          amount: 297,
+          currency: "usd",
+          reason: "early-termination",
+        },
+      },
+      step: step as never,
+      db: fake.db,
+    });
+
+    const inserts = fake.recorded.insert.approvals_queue!;
+    expect(inserts).toHaveLength(1);
+    const inserted = inserts[0]!.values;
+    expect(inserted.type).toBe("refund");
+    expect(inserted.entity_id).toBe("ch_payload");
+    expect(inserted.customer_id).toBe("cust-payload");
+    expect(inserted.status).toBe("pending");
+    expect(inserted.payload_json).toEqual({
+      amount: 297,
+      currency: "usd",
+      reason: "early-termination",
+    });
+  });
+
+  // Iter 13 gap-coverage: explicit decided_at format pin. Asserting
+  // `expect.any(String)` accepts `Date.now()`-coerced numerics; this pins
+  // the actual ISO-8601 shape so a regression would surface.
+  it("decided_at is a parseable ISO-8601 string (not Date.now() coerced)", async () => {
+    const fake = wire({
+      approvals_queue: {
+        insert: { data: { id: "appr-iso" }, error: null },
+        update: { error: null },
+      },
+      customers: { update: { error: null } },
+    });
+    const { step } = makeStep({ data: { decision: "approve" } });
+
+    await runRefundRequested({
+      event: {
+        ...baseEvent,
+        data: { ...baseEvent.data, customer_id: "cust-iso" },
+      },
+      step: step as never,
+      db: fake.db,
+    });
+
+    const decidedAt = fake.recorded.update.approvals_queue![0]!.values.decided_at;
+    expect(typeof decidedAt).toBe("string");
+    expect(decidedAt as string).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(Number.isFinite(new Date(decidedAt as string).getTime())).toBe(true);
+  });
+
+  // Iter 13 gap-coverage: non-"reject" decisions (e.g. "edit") fall into
+  // the approved branch and mark the customer churned. Without this test,
+  // a regression that tightened the predicate to strict-equal-"approve"
+  // would silently break operator UIs that emit richer action strings.
+  it("non-'reject' decision values (e.g. 'edit') route into the approved branch", async () => {
+    const fake = wire({
+      approvals_queue: {
+        insert: { data: { id: "appr-edit" }, error: null },
+        update: { error: null },
+      },
+      customers: { update: { error: null } },
+    });
+    const { step } = makeStep({ data: { decision: "edit", notes: "partial refund" } });
+
+    const out = await runRefundRequested({
+      event: { ...baseEvent, data: { ...baseEvent.data, customer_id: "cust-edit" } },
+      step: step as never,
+      db: fake.db,
+    });
+
+    expect(out).toEqual({ status: "edit", approvalId: "appr-edit" });
+    expect(fake.recorded.update.approvals_queue![0]!.values).toMatchObject({
+      status: "approved",
+      operator_action: "edit",
+      operator_notes: "partial refund",
+    });
+    expect(fake.recorded.update.customers).toHaveLength(1);
+    expect(fake.recorded.update.customers![0]!.values).toEqual({ status: "churned" });
+  });
+
+  // Iter 13 gap-coverage: idempotency of apply-decision under Inngest's
+  // step-level retry. If the step is re-executed after the approvals_queue
+  // update already landed (e.g. transient network blip after the write but
+  // before the step return), the second run must converge to the same
+  // terminal state without double-mutating the customer or throwing.
+  it("apply-decision is idempotent on retry (approve twice yields same terminal state)", async () => {
+    const fake = wire({
+      approvals_queue: {
+        insert: { data: { id: "appr-retry" }, error: null },
+        update: { error: null },
+      },
+      customers: { update: { error: null } },
+    });
+    const { step } = makeStep({ data: { decision: "approve" } });
+
+    // First run.
+    await runRefundRequested({
+      event: { ...baseEvent, data: { ...baseEvent.data, customer_id: "cust-retry" } },
+      step: step as never,
+      db: fake.db,
+    });
+    const updatesAfterFirst = fake.recorded.update.approvals_queue!.length;
+    const custUpdatesAfterFirst = fake.recorded.update.customers!.length;
+
+    // Second run (simulating Inngest retry re-running the whole function).
+    await runRefundRequested({
+      event: { ...baseEvent, data: { ...baseEvent.data, customer_id: "cust-retry" } },
+      step: step as never,
+      db: fake.db,
+    });
+
+    // Both runs converge: each approvals_queue.update + customers.update
+    // ran twice in total (once per invocation) and the terminal values
+    // match. No throw, no divergence.
+    expect(fake.recorded.update.approvals_queue!.length).toBe(updatesAfterFirst * 2);
+    expect(fake.recorded.update.customers!.length).toBe(custUpdatesAfterFirst * 2);
+    for (const w of fake.recorded.update.approvals_queue!) {
+      expect(w.values).toMatchObject({ status: "approved", operator_action: "approve" });
+    }
+    for (const w of fake.recorded.update.customers!) {
+      expect(w.values).toEqual({ status: "churned" });
+    }
   });
 });
 
@@ -470,5 +622,206 @@ describe("runSupportReplyPipeline — triage + approval gate + DB error surfacin
         if: `async.data.id == "appr-s6"`,
       },
     );
+  });
+
+  // Iter 13 gap-coverage: pin runSupportAgent call args. Without this, a
+  // regression that mis-defaults `recent_thread` or
+  // `twenty_one_day_metric_missed` would slip past — every prior test
+  // supplied both fields explicitly so the `?? ""` / `?? false` fallbacks
+  // were never exercised.
+  it("calls runSupportAgent with all 5 event fields when present", async () => {
+    runSupportAgentMock.mockResolvedValueOnce({
+      ok: true,
+      triage: {
+        category: "product_question",
+        urgency: "low",
+        operator_notes: "ans",
+        auto_offer_refund: false,
+      },
+    });
+    const fake = wire({
+      approvals_queue: { insert: { data: { id: "appr-args1" }, error: null } },
+    });
+    const { step } = makeStep(null);
+
+    await runSupportReplyPipeline({
+      event: {
+        data: {
+          customer_email: "alice@example.com",
+          subject: "Hi",
+          body: "Question",
+          recent_thread: "prev: …",
+          twenty_one_day_metric_missed: true,
+        },
+      },
+      step: step as never,
+      db: fake.db,
+    });
+
+    expect(runSupportAgentMock).toHaveBeenCalledTimes(1);
+    expect(runSupportAgentMock).toHaveBeenCalledWith({
+      customer_email: "alice@example.com",
+      subject: "Hi",
+      body: "Question",
+      recent_thread: "prev: …",
+      twenty_one_day_metric_missed: true,
+    });
+  });
+
+  // Iter 13 gap-coverage: exercise the new defaulting behaviour added in
+  // support.ts:38-44. When the event omits `recent_thread` /
+  // `twenty_one_day_metric_missed`, the pipeline must pass `""` / `false`
+  // to the agent (not `undefined`).
+  it("defaults recent_thread to '' and twenty_one_day_metric_missed to false when omitted", async () => {
+    runSupportAgentMock.mockResolvedValueOnce({
+      ok: true,
+      triage: {
+        category: "product_question",
+        urgency: "low",
+        operator_notes: "ans",
+        auto_offer_refund: false,
+      },
+    });
+    const fake = wire({
+      approvals_queue: { insert: { data: { id: "appr-args2" }, error: null } },
+    });
+    const { step } = makeStep(null);
+
+    await runSupportReplyPipeline({
+      event: {
+        data: {
+          customer_email: "bob@example.com",
+          subject: "?",
+          body: "no thread here",
+          // recent_thread + twenty_one_day_metric_missed intentionally omitted
+        },
+      },
+      step: step as never,
+      db: fake.db,
+    });
+
+    expect(runSupportAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer_email: "bob@example.com",
+        recent_thread: "",
+        twenty_one_day_metric_missed: false,
+      }),
+    );
+  });
+
+  // Iter 13 gap-coverage: explicit decided_at ISO-8601 pin (symmetric to
+  // the refund test added in this iter).
+  it("decided_at is a parseable ISO-8601 string", async () => {
+    runSupportAgentMock.mockResolvedValueOnce({
+      ok: true,
+      triage: {
+        category: "product_question",
+        urgency: "low",
+        operator_notes: "ans",
+        auto_offer_refund: false,
+      },
+    });
+    const fake = wire({
+      approvals_queue: {
+        insert: { data: { id: "appr-iso-s" }, error: null },
+        update: { error: null },
+      },
+    });
+    const { step } = makeStep({ data: { decision: "approve" } });
+
+    await runSupportReplyPipeline({ event: baseEvent, step: step as never, db: fake.db });
+
+    const decidedAt = fake.recorded.update.approvals_queue![0]!.values.decided_at;
+    expect(typeof decidedAt).toBe("string");
+    expect(decidedAt as string).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  // Iter 13 gap-coverage: non-"reject" decisions (e.g. "edit") fall into
+  // the approved branch on support too. Pins the support.ts ternary so a
+  // regression tightening to strict-equal-"approve" would surface.
+  it("non-'reject' decision values (e.g. 'edit') route into the approved branch", async () => {
+    runSupportAgentMock.mockResolvedValueOnce({
+      ok: true,
+      triage: {
+        category: "product_question",
+        urgency: "low",
+        operator_notes: "ans",
+        auto_offer_refund: false,
+      },
+    });
+    const fake = wire({
+      approvals_queue: {
+        insert: { data: { id: "appr-s-edit" }, error: null },
+        update: { error: null },
+      },
+    });
+    const { step } = makeStep({ data: { decision: "edit", notes: "tweak it" } });
+
+    const out = await runSupportReplyPipeline({
+      event: baseEvent,
+      step: step as never,
+      db: fake.db,
+    });
+
+    expect(out).toEqual({
+      status: "edit",
+      approvalId: "appr-s-edit",
+      category: "product_question",
+    });
+    expect(fake.recorded.update.approvals_queue![0]!.values).toMatchObject({
+      status: "approved",
+      operator_action: "edit",
+      operator_notes: "tweak it",
+    });
+  });
+});
+
+// ----------------------------------------- supabase-fake .single() recording
+//
+// Iter 13 fix to supabase-fake.ts:144-154 made `.single()` record the
+// insert (the `.insert(v).select().single()` chain previously skipped the
+// `.then` branch and silently dropped the recorded write). The support
+// payload-shape test exercised this transitively, but a targeted unit
+// test on the fake itself prevents regression of the fix in isolation.
+
+describe("supabase-fake — insert recording via .single() terminator", () => {
+  it("records the insert payload exactly once when the chain ends with .single()", async () => {
+    const fake = makeSupabaseFake({
+      approvals_queue: {
+        insert: { data: { id: "x" }, error: null },
+      },
+    });
+
+    const { data, error } = await fake.db
+      .from("approvals_queue")
+      .insert({ type: "refund", entity_id: "ch_x", status: "pending" })
+      .select("id")
+      .single();
+
+    expect(error).toBeNull();
+    expect((data as { id: string }).id).toBe("x");
+    expect(fake.recorded.insert.approvals_queue).toHaveLength(1);
+    expect(fake.recorded.insert.approvals_queue![0]!.values).toEqual({
+      type: "refund",
+      entity_id: "ch_x",
+      status: "pending",
+    });
+  });
+
+  it("records exactly once even when both .then and .single() are reachable on the same builder", async () => {
+    // Idempotency-guard regression: without the `recorded_once` flag both
+    // terminators would push to `recorded.insert`, falsely doubling the
+    // count. This pins the guard.
+    const fake = makeSupabaseFake({
+      approvals_queue: { insert: { data: { id: "y" }, error: null } },
+    });
+
+    await fake.db
+      .from("approvals_queue")
+      .insert({ type: "support_reply", entity_id: "z", status: "pending" })
+      .select("id")
+      .single();
+
+    expect(fake.recorded.insert.approvals_queue).toHaveLength(1);
   });
 });
