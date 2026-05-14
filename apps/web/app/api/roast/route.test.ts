@@ -49,9 +49,12 @@ describe("RoastRequest validation", () => {
 
 const runRoastAgentMock = vi.fn();
 const insertSingleMock = vi.fn();
+const insertPayloadMock = vi.fn();
+const fromTableMock = vi.fn();
 const inngestSendMock = vi.fn();
 const captureServerEventSafeMock = vi.fn();
 const captureServerEventUnsafeMock = vi.fn();
+const captureExceptionMock = vi.fn();
 
 vi.mock("@copywriting-bot/agents/roast", () => ({
   runRoastAgent: (...args: unknown[]) => runRoastAgentMock(...args),
@@ -59,11 +62,18 @@ vi.mock("@copywriting-bot/agents/roast", () => ({
 
 vi.mock("@copywriting-bot/db/client", () => ({
   serviceClient: () => ({
-    from: () => ({
-      insert: () => ({
-        select: () => ({ single: insertSingleMock }),
-      }),
-    }),
+    // Capture the table name + insert payload so a regression that inserts
+    // into the wrong table (e.g., `sequences` instead of `roasts`) or drops a
+    // column is caught at the assertion layer, not silently passed.
+    from: (table: string) => {
+      fromTableMock(table);
+      return {
+        insert: (payload: unknown) => {
+          insertPayloadMock(payload);
+          return { select: () => ({ single: insertSingleMock }) };
+        },
+      };
+    },
   }),
 }));
 
@@ -72,7 +82,7 @@ vi.mock("@copywriting-bot/inngest/client", () => ({
 }));
 
 vi.mock("@copywriting-bot/shared/observability", () => ({
-  captureException: vi.fn(),
+  captureException: captureExceptionMock,
   captureServerEvent: captureServerEventUnsafeMock,
   captureServerEventSafe: captureServerEventSafeMock,
 }));
@@ -101,9 +111,12 @@ beforeEach(async () => {
   vi.resetModules();
   runRoastAgentMock.mockReset();
   insertSingleMock.mockReset();
+  insertPayloadMock.mockReset();
+  fromTableMock.mockReset();
   inngestSendMock.mockReset();
   captureServerEventSafeMock.mockReset();
   captureServerEventUnsafeMock.mockReset();
+  captureExceptionMock.mockReset();
   runRoastAgentMock.mockResolvedValue(AGENT_OK);
   insertSingleMock.mockResolvedValue({ data: { id: "roast-1" }, error: null });
   inngestSendMock.mockResolvedValue({});
@@ -125,11 +138,41 @@ function postJson(body: unknown): Request {
 }
 
 describe("POST /api/roast handler", () => {
-  it("returns 200 with the roast result on the happy path", async () => {
+  it("returns 200 with the full roast result + roast_id on the happy path", async () => {
     const res = await POST(postJson(VALID_BODY));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ roast_id: "roast-1" });
+    // Lock in the whole response shape — a regression that drops `result` or
+    // the badge payload would silently break the share-image flow downstream.
+    expect(body).toEqual({
+      roast_id: "roast-1",
+      result: AGENT_OK.result,
+    });
+  });
+
+  it("persists into the `roasts` table with the expected columns", async () => {
+    await POST(postJson(VALID_BODY));
+    expect(fromTableMock).toHaveBeenCalledWith("roasts");
+    expect(insertPayloadMock).toHaveBeenCalledTimes(1);
+    expect(insertPayloadMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: "user@example.com",
+        source: "web",
+        input_text: VALID_BODY.sequence,
+        overall_score: AGENT_OK.result.overall_score,
+        is_real_cold_email: AGENT_OK.result.is_real_cold_email,
+        result_json: AGENT_OK.result,
+      }),
+    );
+  });
+
+  it("dispatches `roast/submitted` to Inngest with the new roast_id", async () => {
+    await POST(postJson(VALID_BODY));
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).toHaveBeenCalledWith({
+      name: "roast/submitted",
+      data: { roast_id: "roast-1", email: "user@example.com", source: "web" },
+    });
   });
 
   it("calls the safe funnel variant (NOT the unsafe one) with the submitted_email event", async () => {
@@ -154,5 +197,56 @@ describe("POST /api/roast handler", () => {
     // Roast was still generated and persisted despite the funnel failure.
     expect(runRoastAgentMock).toHaveBeenCalledTimes(1);
     expect(insertSingleMock).toHaveBeenCalledTimes(1);
+    // The route's defense-in-depth wrapper reports the error to Sentry.
+    expect(captureExceptionMock).toHaveBeenCalledTimes(1);
+    expect(captureExceptionMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ phase: "roast_funnel_emission" }),
+    );
+  });
+
+  it("still returns 200 when funnel emission AND captureException both throw (total observability failure)", async () => {
+    // Defense-in-depth: the route's catch handler calls captureException, but
+    // if that primitive itself throws (e.g., future regression), the user must
+    // still get their roast. Mirrors safe-capture.test.ts last-resort cases.
+    captureServerEventSafeMock.mockRejectedValueOnce(new Error("posthog 503"));
+    captureExceptionMock.mockImplementationOnce(() => {
+      throw new Error("captureException primitive broke");
+    });
+    const res = await POST(postJson(VALID_BODY));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ roast_id: "roast-1" });
+    expect(insertSingleMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 502 when runRoastAgent fails (non-ok outcome)", async () => {
+    runRoastAgentMock.mockResolvedValueOnce({
+      ok: false as const,
+      status: 502,
+      error: "Anthropic 503",
+    });
+    const res = await POST(postJson(VALID_BODY));
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toMatchObject({ error: "Anthropic 503" });
+    // No DB write, no Inngest dispatch when the agent itself failed.
+    expect(insertSingleMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 502 when the DB insert errors and does NOT dispatch Inngest", async () => {
+    insertSingleMock.mockResolvedValueOnce({
+      data: null,
+      error: new Error("constraint violation"),
+    });
+    const res = await POST(postJson(VALID_BODY));
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "Roast generated but could not be persisted. Try again.",
+    });
+    // Critical: Inngest must NOT receive an event referencing a row that
+    // doesn't exist, or downstream consumers blow up.
+    expect(inngestSendMock).not.toHaveBeenCalled();
   });
 });

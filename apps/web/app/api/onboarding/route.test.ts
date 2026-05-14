@@ -18,6 +18,7 @@ const customerUpdateEqMock = vi.fn();
 const reviewMock = vi.fn();
 const inngestSendMock = vi.fn();
 const captureServerEventSafeMock = vi.fn();
+const captureExceptionMock = vi.fn();
 
 vi.mock("@copywriting-bot/db/client", () => ({
   serviceClient: () => ({
@@ -55,7 +56,7 @@ vi.mock("@copywriting-bot/inngest/client", () => ({
 }));
 
 vi.mock("@copywriting-bot/shared/observability", () => ({
-  captureException: vi.fn(),
+  captureException: captureExceptionMock,
   captureServerEventSafe: captureServerEventSafeMock,
 }));
 
@@ -70,6 +71,7 @@ beforeEach(async () => {
   reviewMock.mockReset();
   inngestSendMock.mockReset();
   captureServerEventSafeMock.mockReset();
+  captureExceptionMock.mockReset();
   reviewMock.mockReturnValue({ ok: true });
   customerUpdateEqMock.mockResolvedValue({ data: null, error: null });
   inngestSendMock.mockResolvedValue({});
@@ -217,5 +219,31 @@ describe("POST /api/onboarding", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ ok: true, customer_id: VALID_UUID, sequence_id: "seq-resilient" });
+    // The route's defense-in-depth wrapper reports the funnel failure.
+    expect(captureExceptionMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ phase: "onboarding_funnel_emission" }),
+    );
+  });
+
+  it("still returns 200 when funnel emission AND captureException both throw (total observability failure)", async () => {
+    insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-bulletproof" }, error: null });
+    captureServerEventSafeMock.mockRejectedValueOnce(new Error("posthog 503"));
+    // Future-regression guard: if captureException ever stops being bulletproof
+    // and throws synchronously, the route must still return the customer's
+    // 200. Mirrors the same case in /api/roast tests.
+    captureExceptionMock.mockImplementationOnce(() => {
+      throw new Error("captureException primitive broke");
+    });
+    const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      customer_id: VALID_UUID,
+      sequence_id: "seq-bulletproof",
+    });
+    // Success-defining work still happened.
+    expect(insertSingleMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
   });
 });

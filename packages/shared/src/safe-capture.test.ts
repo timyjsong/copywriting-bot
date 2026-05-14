@@ -96,6 +96,11 @@ describe("captureServerEventSafe", () => {
     await mod.captureServerEventSafe("user@x.com", "onboarding_completed");
     expect(sentrySetTagMock).toHaveBeenCalledWith("agent", "posthog");
     expect(sentrySetTagMock).toHaveBeenCalledWith("event", "onboarding_completed");
+    // Exactly two tags — agent + event — and nothing else. Guards against
+    // a future regression that adds noise or drops one tag without anyone
+    // noticing because earlier tests in this file also exercise withScope.
+    expect(sentrySetTagMock).toHaveBeenCalledTimes(2);
+    expect(sentryWithScopeMock).toHaveBeenCalledTimes(1);
   });
 
   it("swallows a synchronous capture() throw", async () => {
@@ -120,6 +125,58 @@ describe("captureServerEventSafe", () => {
     await expect(
       mod.captureServerEventSafe("user@x.com", "completed_checkout"),
     ).resolves.toBeUndefined();
+  });
+
+  it("still resolves when Sentry capture returns a rejected promise (no unhandled rejection)", async () => {
+    // Some Sentry transports return a thenable rather than throwing. Without
+    // an explicit .catch in observability.ts, the rejection would escape as
+    // an unhandled rejection on the Node process. The guard must keep that
+    // from happening.
+    flushMock.mockRejectedValueOnce(new Error("posthog 503"));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      // mockImplementationOnce (not mockReturnValueOnce) so the rejected
+      // promise is created at call time — same microtask as the .catch attach
+      // in observability.ts. mockReturnValueOnce would create it at setup,
+      // letting Node fire unhandledRejection before we register the catch.
+      sentryCaptureExceptionMock.mockImplementationOnce(() =>
+        Promise.reject(new Error("sentry transport rejected")),
+      );
+      const mod = await import("./observability.js");
+      await expect(
+        mod.captureServerEventSafe("user@x.com", "completed_checkout"),
+      ).resolves.toBeUndefined();
+      // Yield a couple of ticks so any unhandled-rejection event would have
+      // fired by now.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("does not throw even if console.error itself throws (last-resort log fails)", async () => {
+    // captureException's final-fallback log can in theory throw (broken
+    // stderr). The wrapper must still resolve so route handlers don't see
+    // a 500.
+    flushMock.mockRejectedValueOnce(new Error("posthog 503"));
+    const origErr = console.error;
+    // eslint-disable-next-line no-console
+    console.error = () => {
+      throw new Error("stderr broken");
+    };
+    try {
+      const mod = await import("./observability.js");
+      await expect(
+        mod.captureServerEventSafe("user@x.com", "completed_checkout"),
+      ).resolves.toBeUndefined();
+    } finally {
+      // eslint-disable-next-line no-console
+      console.error = origErr;
+    }
   });
 });
 

@@ -28,10 +28,19 @@ export async function POST(req: Request) {
   // Funnel emission is best-effort: must never block the roast a user just
   // pasted in. The safe wrapper already swallows in-flight errors, but if it
   // ever escapes (Sentry down, etc.) we still want to serve the result.
+  // captureException is bulletproofed at the source but we wrap it again so
+  // any future regression in the primitive can't 500 the user.
   try {
     await captureServerEventSafe(email, "submitted_email", { source: source ?? null });
   } catch (err) {
-    captureException(err, { phase: "roast_funnel_emission" });
+    try {
+      captureException(err, { phase: "roast_funnel_emission" });
+    } catch {
+      // Total observability failure — log to stderr and continue. The roast
+      // is what the user paid for; telemetry is gravy.
+      // eslint-disable-next-line no-console
+      console.error("[copywriting-bot] roast funnel: total observability failure", err);
+    }
   }
 
   const outcome = await runRoastAgent({ sequence, source });

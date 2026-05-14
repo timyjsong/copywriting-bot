@@ -22,14 +22,26 @@ export function captureException(err: unknown, ctx: ObservabilityContext = {}): 
   try {
     Sentry.withScope((scope) => {
       Object.entries(ctx).forEach(([k, v]) => scope.setTag(k, String(v)));
-      Sentry.captureException(err);
+      const maybe = Sentry.captureException(err) as unknown;
+      // Some Sentry transports return a thenable. The sync try/catch wouldn't
+      // see a later rejection — suppress it so this helper truly never escapes
+      // a failure (unhandled-rejection pollution would otherwise leak out).
+      if (maybe && typeof (maybe as { then?: unknown }).then === "function") {
+        (maybe as Promise<unknown>).catch(() => {});
+      }
     });
   } catch {
     // Sentry not configured (dev / test) — swallow.
   }
-  // Always log; Sentry can drop, logs cannot.
-  // eslint-disable-next-line no-console
-  console.error("[copywriting-bot]", err, ctx);
+  try {
+    // Always log; Sentry can drop, logs cannot.
+    // eslint-disable-next-line no-console
+    console.error("[copywriting-bot]", err, ctx);
+  } catch {
+    // stderr broken — last resort, nothing left to do. The contract is "never
+    // throw", and a downstream catch-everything in the safe variant relies on
+    // it. See safe-capture.test.ts "last-resort" cases.
+  }
 }
 
 export function addBreadcrumb(message: string, data: Record<string, unknown> = {}): void {

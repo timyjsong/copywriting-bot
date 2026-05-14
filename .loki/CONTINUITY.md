@@ -1,23 +1,30 @@
 # Session Continuity
 
-Updated: 2026-05-14T18:30:00Z
+Updated: 2026-05-14T14:35:00Z
 
 ## Current State
 
-- Iteration: 16
+- Iteration: 17
 - Phase: PHASE_2_PAID_FLOW
 - RARV Step: VERIFY
 - Provider: claude
-- Elapsed: 3h 25m
+- Elapsed: 3h 30m
 
 ## Last Completed Task
 
-- Iteration 16: addressed iter-15 code-review High/Medium findings — onboarding test
-  now exercises the real rejection path, roast route gained handler-level
-  safe-variant + resilience tests, safe-capture asserts Sentry tags and a
-  Sentry-down scenario, and the safe wrapper got belt-and-suspenders try/catch
-  around its captureException call.
-- Tests: 363 pass (was 357); +6 net new tests across safe-capture, onboarding, roast.
+- Iter 17: close iter-16 code-review gaps. Bulletproof captureException (then-able
+  rejection guard + console.error swallow), wrap captureException itself in a
+  try/catch at /api/roast + /api/onboarding catch handlers (true defense in
+  depth), add tests for: Sentry async-rejection (no unhandled rejection),
+  stderr-broken last-resort log, route-level total-observability failure,
+  runRoastAgent ok:false, /api/roast DB insert failure, full roast response
+  shape, inngest dispatch payload, `roasts` table name capture.
+- Tests: 371 passing across packages/shared, packages/agents, packages/inngest,
+  apps/web, apps/ops.
+- Files changed: packages/shared/src/observability.ts,
+  packages/shared/src/safe-capture.test.ts,
+  apps/web/app/api/roast/route.ts, apps/web/app/api/roast/route.test.ts,
+  apps/web/app/api/onboarding/route.ts, apps/web/app/api/onboarding/route.test.ts
 
 ## Active Blockers
 
@@ -25,28 +32,33 @@ Updated: 2026-05-14T18:30:00Z
 
 ## Next Up
 
-- PostHog funnel tracking — verify coverage of remaining funnel events
-- Stripe Checkout integration ($297 one-time)
-- Onboarding wizard (5 steps) — verify each step emits its own funnel event
-
-## Key Decisions This Session
-
-- Funnel emission lives **after** the success-defining work in route handlers
-  (insert + inngest.send). A failing PostHog must never 500 a user whose work
-  is already persisted. Both `/api/onboarding` and `/api/roast` now wrap the
-  `captureServerEventSafe` call in their own try/catch — defense-in-depth on
-  top of the wrapper's own swallow contract.
+- PostHog funnel tracking (PRD-011) — wiring is in place at /api/roast +
+  /api/onboarding; need to instrument the remaining funnel steps
+  (visited_landing, viewed_result, clicked_upsell, started_checkout,
+  completed_checkout) and verify in PostHog dashboard.
+- Ship to production (PRD-012)
+- Stripe Checkout integration $297 (PRD-013)
 
 ## Mistakes & Learnings
 
-- **iter 15**: Wrote a test titled "still returns 200 when funnel emission fails"
-  that used `mockResolvedValueOnce(undefined)` instead of `mockRejectedValueOnce`.
-  Test title and inline comment claimed the swallow-on-failure contract but the
-  mock never simulated failure. **Prevention**: when a test name says "X
-  fails", the mock must produce a rejection/throw, not a resolution. Read the
-  mock setup line carefully — `mockResolvedValueOnce` is always success.
-- **iter 15**: Swapped `roast/route.ts` to the safe variant without adding a
-  route-level test asserting that swap. A revert would have gone unnoticed.
-  **Prevention**: when changing the *which* of two interchangeable APIs in a
-  route, add a test that asserts the call shape (which mock fired, with what
-  args). Wiring tests are cheap.
+- Iter 17 / async rejection test: `mockReturnValueOnce(Promise.reject(...))`
+  creates the rejected promise at test-setup time, which lets Node fire
+  `unhandledRejection` before the production code's `.catch` attaches —
+  test flakes with PromiseRejectionHandledWarning. Use
+  `mockImplementationOnce(() => Promise.reject(...))` so the promise is
+  created in the same microtask as the catch attach. Defended in
+  safe-capture.test.ts "still resolves when Sentry capture returns a
+  rejected promise (no unhandled rejection)".
+- Iter 17 / "bulletproof at the source, double-guard at the boundary":
+  observability.ts captureException now never throws (then-able catch +
+  stderr swallow), AND route handlers wrap their captureException call
+  in try/catch. The route-level wrap is dead code at runtime but
+  enforceable contract in tests. Defense-in-depth pattern.
+
+## Key Decisions This Session
+
+- Inline route-level try/catch rather than extracting a `fireAndForgetFunnel`
+  helper. Two call sites does not justify the abstraction, and the existing
+  test mocks already target `captureServerEventSafe` directly — adding a
+  helper would force mock-rewrites across both route test suites for no
+  clarity gain.

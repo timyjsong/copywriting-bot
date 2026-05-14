@@ -102,11 +102,18 @@ export async function POST(req: Request) {
 
   // Funnel emission is best-effort and runs *after* the success-defining work
   // (insert + inngest dispatch). Even if the safe wrapper escapes its own
-  // try/catch (Sentry down, etc.), the user gets their 200.
+  // try/catch (Sentry down, etc.), the user gets their 200. The inner
+  // try/catch defends against captureException itself throwing — bulletproofed
+  // at the primitive but we double-guard at the boundary.
   try {
     await captureServerEventSafe(customerId, "onboarding_completed", { customer_id: customerId });
   } catch (err) {
-    captureException(err, { phase: "onboarding_funnel_emission" });
+    try {
+      captureException(err, { phase: "onboarding_funnel_emission" });
+    } catch {
+      // eslint-disable-next-line no-console
+      console.error("[copywriting-bot] onboarding funnel: total observability failure", err);
+    }
   }
 
   return NextResponse.json({ ok: true, customer_id: customerId, sequence_id: sequenceId });
