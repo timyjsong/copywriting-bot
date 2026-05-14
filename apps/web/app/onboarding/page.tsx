@@ -3,11 +3,9 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-// Import from the zero-deps subpath so this Client Component doesn't pull
-// posthog-node into the browser bundle.
-import { funnelInsertId } from "@copywriting-bot/shared/funnel-keys";
 import { trackClient } from "../posthog-client";
 import { abortableSleep, resolveCheckoutSession } from "./resolve-session";
+import { onboardingCompletedPayload } from "./funnel-payloads";
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -94,17 +92,12 @@ function OnboardingInner() {
       });
       const body = (await res.json()) as { error?: string; customer_id?: string };
       if (!res.ok) throw new Error(body.error ?? "Onboarding failed");
-      // $insert_id matches the server-side emit in app/api/onboarding/route.ts
-      // so PostHog dedupes the dual-emission. Skipped when the API didn't
-      // return a customer_id (defensive — would only happen on a malformed
-      // 200 response, which the route doesn't produce). `funnelInsertId` is
-      // the single source of truth for the format — never inline a literal.
-      trackClient("onboarding_completed", {
-        customer_id: body.customer_id ?? null,
-        ...(body.customer_id
-          ? { $insert_id: funnelInsertId("onboarding_completed", body.customer_id) }
-          : {}),
-      });
+      // Payload + $insert_id dedup key built by the pure helper so the format
+      // and the conditional-spread asymmetry (skip $insert_id when customer_id
+      // is missing — avoids the "onboarding_completed:undefined" bucket) are
+      // unit-testable (apps/web/app/onboarding/funnel-payloads.test.ts) and
+      // stay in lockstep with the server emit in app/api/onboarding/route.ts.
+      trackClient("onboarding_completed", onboardingCompletedPayload(body.customer_id));
       setDone(true);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));

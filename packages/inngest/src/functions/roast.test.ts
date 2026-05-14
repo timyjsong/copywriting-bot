@@ -183,4 +183,114 @@ describe("runRoastSubmitted — viewed_result funnel emission", () => {
     expect(props.$insert_id.startsWith("viewed_result:")).toBe(true);
     expect(props.$insert_id).toBe("viewed_result:shared-id");
   });
+
+  it("falls back to serviceClient() when ctx.db is omitted (iter-21 review #6 / #9 — production wrapper path)", async () => {
+    // The Inngest wrapper at roast.ts:54-59 doesn't pass `db`; production
+    // hits `ctx.db ?? serviceClient()`. Every other test injects a fake db,
+    // leaving the fallback path uncovered. Mock the import once so we can
+    // verify it's called when ctx.db is undefined.
+    const upsertMock = vi.fn(async () => ({ data: null, error: null }));
+    const fromMock = vi.fn(() => ({ upsert: upsertMock }));
+    const { serviceClient } = await import("@copywriting-bot/db/client");
+    (serviceClient as unknown as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      from: fromMock,
+    });
+
+    const { step } = makeStep();
+    await runRoastSubmitted({
+      event: { data: { roast_id: "roast-fb", email: "fb@a.test", source: "web" } },
+      step: step as never,
+      // No `db` field — must hit the fallback.
+    });
+
+    expect(serviceClient).toHaveBeenCalledTimes(1);
+    expect(fromMock).toHaveBeenCalledWith("leads");
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+    // Funnel emit still lands when the fallback path is taken — no regression
+    // where the fallback skips the second step.
+    expect(captureServerEventMock).toHaveBeenCalledWith(
+      "fb@a.test",
+      "viewed_result",
+      expect.objectContaining({ $insert_id: "viewed_result:roast-fb" }),
+    );
+  });
+});
+
+describe("runRoastSubmitted — leads upsert error envelope (iter-21 review #5 / #10)", () => {
+  /**
+   * Production code at `roast.ts:32-35` calls
+   * `db.from("leads").upsert(...)` and does NOT inspect the returned
+   * `{ data, error }` envelope. That is INTENTIONAL today — the funnel
+   * emission is more important than the lead row landing, and Supabase's
+   * upsert rarely returns transient errors. But the contract is unverified:
+   * a future change that adds `if (error) throw` (good!) or one that removes
+   * the upsert entirely (bad!) would silently pass every other test.
+   *
+   * These tests pin the CURRENT contract: upsert errors are swallowed at the
+   * step boundary, the funnel emit still runs. A regression in either
+   * direction is now visible.
+   */
+
+  beforeEach(() => {
+    captureServerEventMock.mockReset();
+    captureServerEventMock.mockImplementation(async () => undefined);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it("does NOT throw when leads.upsert returns an error envelope — funnel emit still runs (CURRENT contract)", async () => {
+    const { step, calls } = makeStep();
+    const upsertCalls: Array<unknown> = [];
+    const db = {
+      from: vi.fn(() => ({
+        upsert: vi.fn(async (values: unknown) => {
+          upsertCalls.push(values);
+          // Surface the failure that production currently swallows.
+          return { data: null, error: { message: "duplicate key value violates unique constraint" } };
+        }),
+      })),
+    };
+
+    await runRoastSubmitted({
+      event: { data: { roast_id: "roast-err", email: "err@a.test", source: "web" } },
+      step: step as never,
+      db: db as never,
+    });
+
+    expect(upsertCalls).toHaveLength(1);
+    // Both steps ran — the error envelope did not abort the function.
+    expect(calls.map((c) => c.id)).toEqual(["upsert-lead", "track-funnel"]);
+    // Funnel emit fires regardless of the upsert outcome.
+    expect(captureServerEventMock).toHaveBeenCalledTimes(1);
+    expect(captureServerEventMock).toHaveBeenCalledWith(
+      "err@a.test",
+      "viewed_result",
+      expect.objectContaining({ $insert_id: "viewed_result:roast-err" }),
+    );
+  });
+
+  it("propagates if the upsert call ITSELF throws (vs returning an error envelope) — Inngest will retry", async () => {
+    // Different failure mode: the Supabase client throws instead of returning
+    // `{ error }`. That IS a step-level retry trigger because nothing in
+    // production catches it. Pinning the asymmetry: thrown ≠ error-envelope.
+    const { step } = makeStep();
+    const db = {
+      from: vi.fn(() => ({
+        upsert: vi.fn(async () => {
+          throw new Error("connection refused");
+        }),
+      })),
+    };
+
+    await expect(
+      runRoastSubmitted({
+        event: { data: { roast_id: "roast-throw", email: "t@a.test", source: null } },
+        step: step as never,
+        db: db as never,
+      }),
+    ).rejects.toThrow(/connection refused/);
+
+    // The funnel step never ran — upsert step threw and aborted.
+    expect(captureServerEventMock).not.toHaveBeenCalled();
+  });
 });

@@ -229,4 +229,68 @@ describe("funnelInsertId — PostHog dedup key format", () => {
       "onboarding_completed:a:b:c",
     );
   });
+
+  it("produces a stable empty-key bucket when handed an empty string (iter-21 review #4 boundary)", async () => {
+    const { funnelInsertId } = await import("./funnel.js");
+    // The viewed_result path inlines `funnelInsertId("viewed_result", roastId)`
+    // unconditionally; if a future regression let `roastId` be empty, the
+    // helper produces a deterministic-but-debuggable bucket rather than a
+    // crash or a random uuid. Pinning this so a future "normalize the key"
+    // PR can't silently change empty-handling.
+    expect(funnelInsertId("viewed_result", "")).toBe("viewed_result:");
+  });
+
+  it("preserves a 190-char key (near PostHog's 200-char $insert_id limit) without truncating", async () => {
+    const { funnelInsertId } = await import("./funnel.js");
+    // PostHog documents a 200-char limit on $insert_id. With the
+    // "viewed_result:" prefix (14 chars) the key payload can be up to 186
+    // chars before we approach the cap. 190-char raw key + prefix tests the
+    // verbatim-forwarding contract right at the boundary — a "be defensive,
+    // truncate at N chars" PR would silently change PostHog's dedup window
+    // semantics for long roast IDs.
+    const key = "x".repeat(190);
+    const out = funnelInsertId("viewed_result", key);
+    expect(out).toBe(`viewed_result:${key}`);
+    expect(out.length).toBe(204);
+  });
+
+  it("forwards keys containing newlines, tabs, and control chars verbatim (no normalisation)", async () => {
+    const { funnelInsertId } = await import("./funnel.js");
+    // PostHog accepts these in $insert_id (it dedupes on byte-identical
+    // strings). The contract is "format identical between client + server"
+    // — if the helper ever URL-encoded or stripped whitespace, the two
+    // sides would silently diverge for any key containing these chars.
+    // Roast IDs / customer IDs don't contain them today, but pinning that
+    // a future helper change can't silently shift dedup semantics.
+    expect(funnelInsertId("viewed_result", "a\nb")).toBe("viewed_result:a\nb");
+    expect(funnelInsertId("viewed_result", "a\tb")).toBe("viewed_result:a\tb");
+    expect(funnelInsertId("viewed_result", "  leading-ws")).toBe("viewed_result:  leading-ws");
+    expect(funnelInsertId("viewed_result", "trailing-ws  ")).toBe("viewed_result:trailing-ws  ");
+  });
+});
+
+describe("funnelInsertId — direct import from ./funnel-keys.js (zero-deps subpath)", () => {
+  /**
+   * Iter-21 review finding #6 / #12: `funnel.test.ts` imports `funnelInsertId`
+   * exclusively via the `./funnel.js` re-export. The whole reason
+   * `funnel-keys.ts` exists is so Client Components (apps/web/app/roast/page.tsx,
+   * apps/web/app/onboarding/page.tsx) can import it without pulling
+   * posthog-node into the browser bundle. A broken `funnel-keys.ts` masked by
+   * the inlined re-export would pass every other test in this file.
+   *
+   * Direct import guards the subpath: if `funnel-keys.ts` ever throws at
+   * import time (e.g. someone adds a `posthog-node` import there), this
+   * import fails before any assertion runs.
+   */
+
+  it("returns the same format as the re-exported path (zero-deps subpath is real)", async () => {
+    const direct = await import("./funnel-keys.js");
+    const reexport = await import("./funnel.js");
+    expect(direct.funnelInsertId("viewed_result", "roast-1")).toBe(
+      reexport.funnelInsertId("viewed_result", "roast-1"),
+    );
+    // Belt: pin the exact literal so a future change that quietly diverges
+    // the two paths fails here, not only in production.
+    expect(direct.funnelInsertId("viewed_result", "roast-1")).toBe("viewed_result:roast-1");
+  });
 });

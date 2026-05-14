@@ -4,10 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { RoastResultT } from "@copywriting-bot/shared/schemas";
 import { dimensionLabel, scoreBand, scoreColor, summariseResult } from "@copywriting-bot/shared/scoring";
-// Import from the zero-deps subpath so this Client Component doesn't pull
-// posthog-node into the browser bundle.
-import { funnelInsertId } from "@copywriting-bot/shared/funnel-keys";
 import { identifyClient, trackClient } from "../posthog-client";
+import { viewedResultPayload } from "./funnel-payloads";
 
 type Stage = "idle" | "submitting" | "result" | "error";
 
@@ -43,16 +41,10 @@ export default function RoastPage() {
       setResult(body.result);
       setRoastId(body.roast_id);
       setStage("result");
-      trackClient("viewed_result", {
-        roast_id: body.roast_id,
-        overall_score: body.result.overall_score,
-        is_real_cold_email: body.result.is_real_cold_email,
-        // Matches the server-side $insert_id in packages/inngest/src/functions/roast.ts
-        // so PostHog dedupes the dual-emission. `funnelInsertId` is the single
-        // source of truth for the format — drift between client + server
-        // silently double-counts conversions.
-        $insert_id: funnelInsertId("viewed_result", body.roast_id),
-      });
+      // Payload + $insert_id dedup key built by the pure helper so the format
+      // is unit-testable (apps/web/app/roast/funnel-payloads.test.ts) and stays
+      // in lockstep with the server-side emit in roast.ts.
+      trackClient("viewed_result", viewedResultPayload(body.result, body.roast_id));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
       setStage("error");
