@@ -3,6 +3,18 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import {
+  campaignTone,
+  performanceTone,
+  renderCampaignBody,
+  renderPerformanceBody,
+  renderSequenceBody,
+  sequenceTone,
+  type Campaign,
+  type Sequence,
+  type Snapshot,
+  type Tone,
+} from "./helpers";
 
 /**
  * Customer dashboard. Pre-auth MVP renders status keyed by `?email=` from
@@ -19,29 +31,9 @@ type Status = {
     company_domain: string | null;
     created_at: string;
   };
-  sequence?: {
-    id: string;
-    version: number;
-    status: string;
-    created_at: string;
-    approved_at: string | null;
-  } | null;
-  campaign?: {
-    id: string;
-    status: string;
-    warmup_status: string | null;
-    daily_cap: number;
-    started_at: string | null;
-  } | null;
-  latest_snapshot?: {
-    snapshot_date: string;
-    opens: number;
-    replies: number;
-    meetings_booked: number;
-    baseline_reply_rate: number | null;
-    current_reply_rate: number | null;
-    uplift_pct: number | null;
-  } | null;
+  sequence?: Sequence;
+  campaign?: Campaign;
+  latest_snapshot?: Snapshot;
 };
 
 export default function CustomerDashboardPage() {
@@ -156,7 +148,7 @@ function DashboardInner() {
   );
 }
 
-function Card({ title, body, tone }: { title: string; body: string; tone: "neutral" | "pending" | "good" | "bad" }) {
+function Card({ title, body, tone }: { title: string; body: string; tone: Tone }) {
   const accent =
     tone === "good"
       ? "border-green-200 bg-green-50"
@@ -171,53 +163,4 @@ function Card({ title, body, tone }: { title: string; body: string; tone: "neutr
       <p className="mt-2 text-base">{body}</p>
     </div>
   );
-}
-
-function renderSequenceBody(seq: Status["sequence"]): string {
-  if (!seq) return "Pending — finish onboarding to start your rewrite.";
-  if (seq.status === "draft") return "Draft submitted. Rewrite Agent is generating.";
-  if (seq.status === "pending_approval") return "Rewrite drafted — awaiting operator approval.";
-  if (seq.status === "approved")
-    return `Rewrite approved on ${seq.approved_at ? new Date(seq.approved_at).toLocaleDateString() : "—"}.`;
-  if (seq.status === "active") return "Live — being sent on your domain.";
-  if (seq.status === "rejected") return "Rewrite was rejected. We're regenerating.";
-  return `Status: ${seq.status}`;
-}
-
-function sequenceTone(status: string | undefined): "neutral" | "pending" | "good" | "bad" {
-  if (!status) return "neutral";
-  if (status === "approved" || status === "active") return "good";
-  if (status === "rejected") return "bad";
-  return "pending";
-}
-
-function renderCampaignBody(c: Status["campaign"]): string {
-  if (!c) return "Awaiting rewrite approval.";
-  if (c.status === "warmup") return `Warmup in progress (${c.warmup_status ?? "scheduled"}). Daily cap: ${c.daily_cap}.`;
-  if (c.status === "sending")
-    return `Live. Daily cap: ${c.daily_cap}. Started ${c.started_at ? new Date(c.started_at).toLocaleDateString() : "—"}.`;
-  if (c.status === "paused") return "Paused.";
-  if (c.status === "ended") return "Campaign ended.";
-  if (c.status === "failed") return "Campaign failed — operator is on it.";
-  return `Status: ${c.status}`;
-}
-
-function campaignTone(status: string | undefined): "neutral" | "pending" | "good" | "bad" {
-  if (!status) return "neutral";
-  if (status === "sending") return "good";
-  if (status === "failed") return "bad";
-  return "pending";
-}
-
-function renderPerformanceBody(s: Status["latest_snapshot"]): string {
-  if (!s) return "No data yet — campaign hasn't sent its first batch.";
-  const uplift = s.uplift_pct == null ? "—" : `${s.uplift_pct.toFixed(1)}%`;
-  return `As of ${s.snapshot_date}: ${s.replies} replies, ${s.meetings_booked} meetings. Uplift ${uplift}.`;
-}
-
-function performanceTone(uplift: number | null): "neutral" | "pending" | "good" | "bad" {
-  if (uplift == null) return "neutral";
-  if (uplift >= 10) return "good";
-  if (uplift < 0) return "bad";
-  return "pending";
 }
