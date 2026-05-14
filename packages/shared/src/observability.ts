@@ -76,6 +76,11 @@ export type FunnelEvent =
  * Server-side capture of a funnel event. Safe to call without a PostHog key —
  * becomes a noop. Always include a distinctId (email, customer_id, or anonymous
  * cookie value) so funnels stitch.
+ *
+ * Throws propagate. Use inside Inngest `step.run` so step-level retries fire
+ * on transient PostHog failures. For HTTP route hot paths use
+ * `captureServerEventSafe` — a dropped funnel event must never fail a
+ * user-facing request.
  */
 export async function captureServerEvent(
   distinctId: string,
@@ -86,6 +91,24 @@ export async function captureServerEvent(
   if (!ph) return;
   ph.capture({ distinctId, event, properties });
   await ph.flush();
+}
+
+/**
+ * HTTP-route-safe wrapper around `captureServerEvent`. Catches any throw
+ * (PostHog 5xx, network blip, malformed init) and reports it to Sentry
+ * rather than failing the request. Use in Next.js route handlers; use the
+ * unsafe variant in Inngest steps so retries kick in.
+ */
+export async function captureServerEventSafe(
+  distinctId: string,
+  event: FunnelEvent,
+  properties: Record<string, unknown> = {},
+): Promise<void> {
+  try {
+    await captureServerEvent(distinctId, event, properties);
+  } catch (err) {
+    captureException(err, { agent: "posthog", event });
+  }
 }
 
 /** Convenience for hot paths where we just want a fire-and-forget. */

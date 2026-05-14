@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { runRoastAgent } from "@copywriting-bot/agents/roast";
 import { RoastRequest } from "@copywriting-bot/shared/schemas";
 import { serviceClient } from "@copywriting-bot/db/client";
-import { captureServerEvent } from "@copywriting-bot/shared/observability";
+import { captureServerEventSafe } from "@copywriting-bot/shared/observability";
 import { inngest } from "@copywriting-bot/inngest/client";
 
 export const runtime = "nodejs";
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   }
   const { email, sequence, source } = parsed.data;
 
-  await captureServerEvent(email, "submitted_email", { source: source ?? null });
+  await captureServerEventSafe(email, "submitted_email", { source: source ?? null });
 
   const outcome = await runRoastAgent({ sequence, source });
   if (!outcome.ok) {

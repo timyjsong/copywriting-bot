@@ -17,7 +17,7 @@ const customerLookupMaybeSingleMock = vi.fn();
 const customerUpdateEqMock = vi.fn();
 const reviewMock = vi.fn();
 const inngestSendMock = vi.fn();
-const captureServerEventMock = vi.fn();
+const captureServerEventSafeMock = vi.fn();
 
 vi.mock("@copywriting-bot/db/client", () => ({
   serviceClient: () => ({
@@ -56,7 +56,7 @@ vi.mock("@copywriting-bot/inngest/client", () => ({
 
 vi.mock("@copywriting-bot/shared/observability", () => ({
   captureException: vi.fn(),
-  captureServerEvent: captureServerEventMock,
+  captureServerEventSafe: captureServerEventSafeMock,
 }));
 
 type RouteModule = typeof import("./route.js");
@@ -69,11 +69,11 @@ beforeEach(async () => {
   customerUpdateEqMock.mockReset();
   reviewMock.mockReset();
   inngestSendMock.mockReset();
-  captureServerEventMock.mockReset();
+  captureServerEventSafeMock.mockReset();
   reviewMock.mockReturnValue({ ok: true });
   customerUpdateEqMock.mockResolvedValue({ data: null, error: null });
   inngestSendMock.mockResolvedValue({});
-  captureServerEventMock.mockResolvedValue(undefined);
+  captureServerEventSafeMock.mockResolvedValue(undefined);
   const mod = await import("./route.js");
   POST = mod.POST;
 });
@@ -192,5 +192,21 @@ describe("POST /api/onboarding", () => {
     const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
     expect(res.status).toBe(500);
     await expect(res.json()).resolves.toMatchObject({ error: "DB error persisting sequence" });
+  });
+
+  it("still returns 200 when funnel emission fails (uses safe variant)", async () => {
+    insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-safe" }, error: null });
+    // captureServerEventSafe throwing would surface here as a rejected mock
+    // — the safe wrapper swallows in production, so it must be safe to call
+    // it even if it ever escapes. We assert the route still returns 200.
+    captureServerEventSafeMock.mockResolvedValueOnce(undefined);
+    const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
+    expect(res.status).toBe(200);
+    expect(captureServerEventSafeMock).toHaveBeenCalledTimes(1);
+    expect(captureServerEventSafeMock).toHaveBeenCalledWith(
+      VALID_UUID,
+      "onboarding_completed",
+      { customer_id: VALID_UUID },
+    );
   });
 });

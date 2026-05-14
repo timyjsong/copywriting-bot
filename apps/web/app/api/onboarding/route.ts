@@ -3,7 +3,7 @@ import { z } from "zod";
 import { reviewOnboardingPayload } from "@copywriting-bot/agents/onboarder";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { inngest } from "@copywriting-bot/inngest/client";
-import { captureException, captureServerEvent } from "@copywriting-bot/shared/observability";
+import { captureException, captureServerEventSafe } from "@copywriting-bot/shared/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,7 +93,7 @@ export async function POST(req: Request) {
       data: { customer_id: customerId, sequence_id: sequence.id },
     });
 
-    await captureServerEvent(customerId, "onboarding_completed", { customer_id: customerId });
+    await captureServerEventSafe(customerId, "onboarding_completed", { customer_id: customerId });
 
     return NextResponse.json({ ok: true, customer_id: customerId, sequence_id: sequence.id });
   } catch (err) {
