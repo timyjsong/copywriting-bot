@@ -36,6 +36,7 @@ import { runOnboardingPipeline } from "./onboarding.js";
 import { runSendBatchGenerate } from "./sendBatch.js";
 import { runPerformanceDailyPull, parseSmartleadCampaignId } from "./performance.js";
 import {
+  assertUniqueStepIds,
   makeStep,
   makeSupabaseFake,
   type TableConfig,
@@ -58,7 +59,11 @@ describe("sendBatchGenerate — error paths + edge cases", () => {
   }
 
   beforeEach(() => {
-    captureServerEventMock.mockClear();
+    // mockReset (not mockClear) so an unconsumed mockRejectedValueOnce from a
+    // failing test cannot leak into the next test's queue; reapply the default
+    // resolved-undefined impl after the reset.
+    captureServerEventMock.mockReset();
+    captureServerEventMock.mockImplementation(async () => undefined);
   });
 
   it("returns {status:'skipped'} when campaign.status is not warmup or sending", async () => {
@@ -163,7 +168,7 @@ describe("sendBatchGenerate — error paths + edge cases", () => {
       send_batches: { insert: { data: { id: "batch-99" }, error: null } },
       approvals_queue: { insert: { data: { id: "approval-99" }, error: null } },
     });
-    const { step } = makeStep(null);
+    const { step, calls, sentEvents } = makeStep(null);
 
     const out = await runSendBatchGenerate({
       event: { data: { campaign_id: "camp-1", batch_date: "2026-05-14" } },
@@ -177,6 +182,9 @@ describe("sendBatchGenerate — error paths + edge cases", () => {
     expect(writes[0]!.values).toMatchObject({ status: "failed" });
     expect(writes[0]!.eqArgs).toEqual([["id", "batch-99"]]);
     expect(captureServerEventMock).not.toHaveBeenCalled();
+    // Locks step-ID uniqueness on the timeout branch — `mark-batch-failed`
+    // must not collide with any happy-path id (e.g. `apply-decision`).
+    assertUniqueStepIds(calls, sentEvents);
   });
 
   it("LOCKS contract: non-'reject' decisions (e.g. 'edit') fall into the approve branch", async () => {
@@ -250,6 +258,58 @@ describe("sendBatchGenerate — error paths + edge cases", () => {
       }),
     ).rejects.toThrow(/posthog down/);
   });
+
+  it("THROWS when apply-decision send_batches update returns an error", async () => {
+    // A silent DB failure here would leave the batch in pending_approval while
+    // the function reports success and sequence_activated would still fire.
+    // The throw makes Inngest retry the step (≤3 attempts) and surfaces the
+    // stuck-queue case in the Inngest run viewer.
+    const fake = wire({
+      campaigns: { select: { data: baseCampaign, error: null } },
+      send_batches: {
+        insert: { data: { id: "batch-1" }, error: null },
+        update: { data: null, error: new Error("batch update conflict") },
+      },
+      approvals_queue: { insert: { data: { id: "approval-1" }, error: null } },
+    });
+    const { step } = makeStep({ data: { decision: "approve", notes: null } });
+
+    await expect(
+      runSendBatchGenerate({
+        event: { data: { campaign_id: "camp-1", batch_date: "2026-05-14" } },
+        step: step as never,
+        db: fake.db,
+      }),
+    ).rejects.toThrow(/batch update conflict/);
+    // Apply-decision threw before the funnel emit could run.
+    expect(captureServerEventMock).not.toHaveBeenCalled();
+    // approvals_queue update never ran because send_batches update threw first.
+    expect(fake.recorded.update.approvals_queue ?? []).toEqual([]);
+  });
+
+  it("THROWS when apply-decision approvals_queue update returns an error", async () => {
+    const fake = wire({
+      campaigns: { select: { data: baseCampaign, error: null } },
+      send_batches: {
+        insert: { data: { id: "batch-1" }, error: null },
+        update: { data: null, error: null },
+      },
+      approvals_queue: {
+        insert: { data: { id: "approval-1" }, error: null },
+        update: { data: null, error: new Error("approvals row locked") },
+      },
+    });
+    const { step } = makeStep({ data: { decision: "approve", notes: null } });
+
+    await expect(
+      runSendBatchGenerate({
+        event: { data: { campaign_id: "camp-1", batch_date: "2026-05-14" } },
+        step: step as never,
+        db: fake.db,
+      }),
+    ).rejects.toThrow(/approvals row locked/);
+    expect(captureServerEventMock).not.toHaveBeenCalled();
+  });
 });
 
 // ------------------------------------------------------------------ onboarding
@@ -293,7 +353,11 @@ describe("onboardingPipeline — error paths + intermediate writes", () => {
   }
 
   beforeEach(() => {
-    captureServerEventMock.mockClear();
+    // mockReset (not mockClear) so an unconsumed mockRejectedValueOnce from a
+    // failing test cannot leak into the next test's queue; reapply the default
+    // resolved-undefined impl after the reset.
+    captureServerEventMock.mockReset();
+    captureServerEventMock.mockImplementation(async () => undefined);
     runRewriteAgentMock.mockReset();
     runBrandVoiceAgentMock.mockReset();
     runBrandVoiceAgentMock.mockResolvedValue({
@@ -495,6 +559,75 @@ describe("onboardingPipeline — error paths + intermediate writes", () => {
       }),
     ).rejects.toThrow(/posthog down/);
   });
+
+  it("THROWS when apply-decision approvals_queue update returns an error", async () => {
+    // A silent DB failure here would leave the row in pending_approval while
+    // the function reports success and rewrite_approved would still fire. The
+    // throw makes Inngest retry the step (≤3 attempts) and surfaces the
+    // stuck-queue case in the Inngest run viewer.
+    const fake = wire({
+      sequences: { select: { data: baseSequence, error: null } },
+      approvals_queue: {
+        insert: { data: { id: "approval-1" }, error: null },
+        update: { data: null, error: new Error("approvals row locked") },
+      },
+    });
+    const { step } = makeStep({ data: { decision: "approve", notes: null } });
+
+    await expect(
+      runOnboardingPipeline({
+        event: { data: { customer_id: "cust-1", sequence_id: "seq-1" } },
+        step: step as never,
+        db: fake.db,
+      }),
+    ).rejects.toThrow(/approvals row locked/);
+    expect(captureServerEventMock).not.toHaveBeenCalled();
+    // sequences update never ran because approvals_queue update threw first.
+    // (Both apply-decision updates are isolated from the intermediate write,
+    // which writes rewritten_text and runs in create-approval — that has
+    // already succeeded by the time the failing update fires.)
+    expect(
+      (fake.recorded.update.sequences ?? []).filter((w) =>
+        Object.keys(w.values).includes("approved_at"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("THROWS when apply-decision sequences update returns an error (per-call config isolates from intermediate)", async () => {
+    // The sequences table is updated twice in the success path:
+    //   1. create-approval step: writes rewritten_text + status='pending_approval'
+    //   2. apply-decision step:  writes status='approved' + approved_at
+    // Use the function-form update config to fail ONLY the apply-decision
+    // write — proves the second update's error is surfaced, not swallowed.
+    const fake = wire({
+      sequences: {
+        select: { data: baseSequence, error: null },
+        update: (values) =>
+          "approved_at" in values
+            ? { data: null, error: new Error("sequences approved_at write failed") }
+            : { data: null, error: null },
+      },
+      approvals_queue: { insert: { data: { id: "approval-1" }, error: null } },
+    });
+    const { step } = makeStep({ data: { decision: "approve", notes: null } });
+
+    await expect(
+      runOnboardingPipeline({
+        event: { data: { customer_id: "cust-1", sequence_id: "seq-1" } },
+        step: step as never,
+        db: fake.db,
+      }),
+    ).rejects.toThrow(/sequences approved_at write failed/);
+    expect(captureServerEventMock).not.toHaveBeenCalled();
+    // Both updates were attempted (intermediate succeeded, apply-decision failed).
+    expect(fake.recorded.update.sequences).toHaveLength(2);
+    expect(fake.recorded.update.sequences![0]!.values).toMatchObject({
+      status: "pending_approval",
+    });
+    expect(fake.recorded.update.sequences![1]!.values).toMatchObject({
+      status: "approved",
+    });
+  });
 });
 
 // ----------------------------------------------------------------- performance
@@ -505,7 +638,11 @@ describe("performanceDailyPull — error paths + edge cases", () => {
   }
 
   beforeEach(() => {
-    captureServerEventMock.mockClear();
+    // mockReset (not mockClear) so an unconsumed mockRejectedValueOnce from a
+    // failing test cannot leak into the next test's queue; reapply the default
+    // resolved-undefined impl after the reset.
+    captureServerEventMock.mockReset();
+    captureServerEventMock.mockImplementation(async () => undefined);
     getCampaignMetricsMock.mockReset();
     computePerformanceMock.mockReset();
     getCampaignMetricsMock.mockResolvedValue({ sent: 100, unique_opens: 50, replies: 5 });
@@ -715,5 +852,166 @@ describe("performanceDailyPull — error paths + edge cases", () => {
     await expect(
       runPerformanceDailyPull({ step: step as never, db: fake.db }),
     ).rejects.toThrow(/posthog down/);
+  });
+});
+
+// -------------------------------------------------- cross-cutting: step-ID uniqueness
+//
+// Inngest requires step ids to be unique within a single function invocation;
+// duplicates are a latent prod bug (re-entry on the same id is silently
+// elided). Lock this contract across all three functions' happy paths so a
+// future caller that copies-and-pastes a step id surfaces immediately.
+
+describe("step-ID uniqueness across happy paths", () => {
+  beforeEach(() => {
+    captureServerEventMock.mockReset();
+    captureServerEventMock.mockImplementation(async () => undefined);
+    runRewriteAgentMock.mockReset();
+    runBrandVoiceAgentMock.mockReset();
+    runBrandVoiceAgentMock.mockResolvedValue({
+      ok: true,
+      result: {
+        tone: ["plain"],
+        positioning: "p",
+        key_phrases: [],
+        avoid_phrases: [],
+        reading_level: "professional",
+        source_urls: ["https://acme.example"],
+      },
+    });
+    runRewriteAgentMock.mockResolvedValue({
+      ok: true,
+      result: {
+        emails: [
+          {
+            step: 1,
+            purpose: "open",
+            send_delay_days: 0,
+            subject: "s",
+            body: "b",
+            personalisation_tokens: [],
+            diff_summary: "d",
+            new_claims: [],
+          },
+        ],
+        playbook_used: "p",
+        expected_reply_rate_band: "4-7%",
+        guardrail_flags: [],
+        rationale: "r",
+      },
+    });
+    getCampaignMetricsMock.mockReset();
+    computePerformanceMock.mockReset();
+    getCampaignMetricsMock.mockResolvedValue({ sent: 100, unique_opens: 50, replies: 5 });
+    computePerformanceMock.mockImplementation(({ campaign_id, customer_id }) => ({
+      campaign_id,
+      customer_id,
+      current_reply_rate: 0.05,
+      uplift_pct: 12,
+      trigger_free_rewrite: false,
+    }));
+  });
+
+  it("sendBatchGenerate happy path emits no duplicate step ids", async () => {
+    const fake = makeSupabaseFake({
+      campaigns: {
+        select: {
+          data: {
+            id: "camp-1",
+            customer_id: "cust-1",
+            sequence_id: "seq-1",
+            daily_cap: 50,
+            status: "sending",
+            smartlead_campaign_id: "sl-1",
+          },
+          error: null,
+        },
+      },
+      send_batches: {
+        insert: { data: { id: "batch-1" }, error: null },
+        count: { count: 0, error: null },
+      },
+      approvals_queue: { insert: { data: { id: "approval-1" }, error: null } },
+    });
+    const { step, calls, sentEvents } = makeStep({
+      data: { decision: "approve", notes: null },
+    });
+
+    await runSendBatchGenerate({
+      event: { data: { campaign_id: "camp-1", batch_date: "2026-05-14" } },
+      step: step as never,
+      db: fake.db,
+    });
+
+    assertUniqueStepIds(calls, sentEvents);
+  });
+
+  it("onboardingPipeline happy path emits no duplicate step ids", async () => {
+    const fake = makeSupabaseFake({
+      sequences: {
+        select: {
+          data: {
+            id: "seq-1",
+            original_text: "old copy",
+            voice_profile_json: { url: "https://acme.example", content: "About us..." },
+            icp_json: {
+              industry: "B2B SaaS",
+              company_stage: "Series A-B",
+              size_range: "20-200",
+              buyer_titles: ["Founder"],
+              pain_signals: ["low reply rate"],
+              geo: ["US"],
+            },
+          },
+          error: null,
+        },
+      },
+      approvals_queue: { insert: { data: { id: "approval-1" }, error: null } },
+    });
+    const { step, calls, sentEvents } = makeStep({
+      data: { decision: "approve", notes: null },
+    });
+
+    await runOnboardingPipeline({
+      event: { data: { customer_id: "cust-1", sequence_id: "seq-1" } },
+      step: step as never,
+      db: fake.db,
+    });
+
+    assertUniqueStepIds(calls, sentEvents);
+  });
+
+  it("performanceDailyPull happy path emits no duplicate step ids", async () => {
+    const fake = makeSupabaseFake({
+      campaigns: {
+        pages: {
+          pageSize: 200,
+          pages: [
+            [
+              {
+                id: "camp-A",
+                customer_id: "cust-A",
+                smartlead_campaign_id: "100",
+                started_at: "2026-04-01T00:00:00Z",
+              },
+              {
+                id: "camp-B",
+                customer_id: "cust-B",
+                smartlead_campaign_id: "200",
+                started_at: "2026-04-01T00:00:00Z",
+              },
+            ],
+          ],
+        },
+      },
+    });
+    const { step, calls, sentEvents } = makeStep();
+
+    await runPerformanceDailyPull({ step: step as never, db: fake.db });
+
+    // Per-campaign step ids must include the campaign id so two campaigns in
+    // the same run don't collide on `pull-metrics` / `upsert-snapshot` /
+    // emission ids.
+    assertUniqueStepIds(calls, sentEvents);
   });
 });

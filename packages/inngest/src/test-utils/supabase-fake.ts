@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { DbPort } from "../functions/_db.js";
 
 /**
@@ -30,7 +30,16 @@ import type { DbPort } from "../functions/_db.js";
 export type TableConfig = {
   select?: { data: unknown; error?: unknown };
   insert?: { data: unknown; error?: unknown };
-  update?: { data?: unknown; error?: unknown };
+  /**
+   * Update result. Accepts either a single object (returned for every update
+   * to this table) or a function that receives the values payload and returns
+   * a result — use the function form when two updates to the same table need
+   * different outcomes (e.g. intermediate write succeeds but apply-decision
+   * write fails).
+   */
+  update?:
+    | { data?: unknown; error?: unknown }
+    | ((values: Record<string, unknown>) => { data?: unknown; error?: unknown });
   upsert?: { data?: unknown; error?: unknown };
   count?: { count: number | null; error?: unknown };
   pages?: { pageSize: number; pages: unknown[][] };
@@ -148,7 +157,11 @@ export function makeSupabaseFake(tables: Record<string, TableConfig>): SupabaseF
           (recorded.update[table] ??= []).push({ values: pendingValues ?? {}, eqArgs, neqArgs });
           recorded_once = true;
         }
-        return Promise.resolve(cfg.update ?? { data: null, error: null }).then(resolve);
+        const updateCfg =
+          typeof cfg.update === "function"
+            ? cfg.update(pendingValues ?? {})
+            : cfg.update;
+        return Promise.resolve(updateCfg ?? { data: null, error: null }).then(resolve);
       }
       if (mode === "count") {
         if (!recorded_once) {
@@ -198,4 +211,19 @@ export function makeStep(waitForEventReturn: unknown = null) {
     }),
   };
   return { step, calls, sentEvents };
+}
+
+/**
+ * Asserts that all `step.run`/`step.sendEvent` ids in a single function
+ * invocation are unique. Inngest enforces this at runtime, so any duplicate
+ * is a latent production bug — pinning it in tests catches re-entry hazards
+ * on error-path branches (e.g. timeout → `mark-batch-failed`) that the happy
+ * path doesn't exercise.
+ */
+export function assertUniqueStepIds(
+  calls: StepRunCall[],
+  sentEvents: Array<{ id: string }>,
+): void {
+  const ids = [...calls.map((c) => c.id), ...sentEvents.map((e) => e.id)];
+  expect(new Set(ids).size).toBe(ids.length);
 }

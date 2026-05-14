@@ -113,10 +113,13 @@ export async function runOnboardingPipeline({ event, step, db: dbOverride }: Onb
     return { status: "timeout", approvalId };
   }
 
-  // Step 5: persist decision
+  // Step 5: persist decision. Re-throw on DB error so Inngest retries this
+  // step (≤3 attempts w/ exponential backoff). A silent DB failure here would
+  // leave the row in `pending_approval` while the function reports success
+  // and the downstream funnel event would still fire — masking a stuck queue.
   await step.run("apply-decision", async () => {
     const status = decision.data.decision === "reject" ? "rejected" : "approved";
-    await db
+    const { error: approvalErr } = await db
       .from("approvals_queue")
       .update({
         status: decision.data.decision === "reject" ? "rejected" : "approved",
@@ -125,7 +128,12 @@ export async function runOnboardingPipeline({ event, step, db: dbOverride }: Onb
         decided_at: new Date().toISOString(),
       })
       .eq("id", approvalId);
-    await db.from("sequences").update({ status, approved_at: new Date().toISOString() }).eq("id", sequence_id);
+    if (approvalErr) throw approvalErr;
+    const { error: seqErr } = await db
+      .from("sequences")
+      .update({ status, approved_at: new Date().toISOString() })
+      .eq("id", sequence_id);
+    if (seqErr) throw seqErr;
   });
 
   if (decision.data.decision !== "reject") {

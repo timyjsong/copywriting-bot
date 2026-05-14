@@ -93,18 +93,24 @@ export async function runSendBatchGenerate({ event, step, db: dbOverride }: Send
     return { status: "timeout", batchId };
   }
 
+  // Re-throw on DB error so Inngest retries this step (≤3 attempts w/
+  // exponential backoff). Silent failure would leave the batch in
+  // pending_approval while the function reports success and `sequence_activated`
+  // would still fire — masking a stuck queue.
   await step.run("apply-decision", async () => {
     const finalStatus = decision.data.decision === "reject" ? "rejected" : "approved";
-    await db.from("send_batches").update({
+    const { error: batchErr } = await db.from("send_batches").update({
       status: finalStatus,
       approved_at: new Date().toISOString(),
     }).eq("id", batchId);
-    await db.from("approvals_queue").update({
+    if (batchErr) throw batchErr;
+    const { error: approvalErr } = await db.from("approvals_queue").update({
       status: finalStatus === "rejected" ? "rejected" : "approved",
       operator_action: decision.data.decision,
       operator_notes: decision.data.notes ?? null,
       decided_at: new Date().toISOString(),
     }).eq("id", approvalId);
+    if (approvalErr) throw approvalErr;
   });
 
   if (decision.data.decision !== "reject") {
