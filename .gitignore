@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Testing
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# Supabase
+supabase/.branches/
+supabase/.temp/
+
+# Vercel
+.vercel/
+
+# Turbo
+.turbo/
+
+# Loki internal (kept in repo but not user-edited artifacts)
+.loki/logs/
+.loki/pids/
+.loki/session.lock
+.loki/session.lock.lockdir/
+.loki/loki.pid

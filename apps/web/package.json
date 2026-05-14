@@ -1,0 +1,42 @@
+{
+  "name": "@copywriting-bot/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.0",
+    "@copywriting-bot/agents": "workspace:*",
+    "@copywriting-bot/db": "workspace:*",
+    "@copywriting-bot/inngest": "workspace:*",
+    "@copywriting-bot/shared": "workspace:*",
+    "inngest": "^3.27.0",
+    "next": "^15.0.3",
+    "posthog-js": "^1.181.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "stripe": "^17.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.13.0",
+    "eslint-config-next": "^15.0.3",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

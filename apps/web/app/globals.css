@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  background: theme("colors.cream");
+  color: theme("colors.ink");
+}
+
+.measure {
+  max-width: 60ch;
+}

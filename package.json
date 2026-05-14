@@ -1,0 +1,24 @@
+{
+  "name": "copywriting-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous copywriting business for B2B SaaS founders.",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --parallel build",
+    "dev": "pnpm -r --parallel --filter \"./apps/*\" dev",
+    "lint": "pnpm -r --parallel lint",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "test": "pnpm -r --parallel test",
+    "test:e2e": "pnpm --filter @copywriting-bot/web test:e2e",
+    "clean": "pnpm -r --parallel exec rm -rf .next dist .turbo *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

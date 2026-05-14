@@ -1,0 +1,30 @@
+{
+  "name": "@copywriting-bot/inngest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./functions": "./src/functions/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "echo 'noop'",
+    "build": "echo 'noop'"
+  },
+  "dependencies": {
+    "inngest": "^3.27.0",
+    "@copywriting-bot/agents": "workspace:*",
+    "@copywriting-bot/db": "workspace:*",
+    "@copywriting-bot/shared": "workspace:*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
