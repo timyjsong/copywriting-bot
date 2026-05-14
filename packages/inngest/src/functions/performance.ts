@@ -17,6 +17,10 @@ export type PerformancePullCtx = {
   };
 };
 
+// Chunk size for paginating list-active-campaigns. Caps single-function memory and
+// gives Inngest a natural per-step boundary; tune as customer count grows.
+const ACTIVE_CAMPAIGN_PAGE_SIZE = 200;
+
 /**
  * performanceDailyPull — scheduled daily; pulls Smartlead metrics for every
  * active campaign, persists a performance_snapshot row, and triggers the
@@ -26,12 +30,26 @@ export async function runPerformanceDailyPull({ step }: PerformancePullCtx) {
   const db = serviceClient();
 
   const campaigns: ActiveCampaign[] = await step.run("list-active-campaigns", async () => {
-    const { data, error } = await db
-      .from("campaigns")
-      .select("id, customer_id, smartlead_campaign_id, started_at")
-      .in("status", ["warmup", "sending"]);
-    if (error) throw error;
-    return (data ?? []) as ActiveCampaign[];
+    const collected: ActiveCampaign[] = [];
+    let from = 0;
+    // Paginate via Supabase .range so a single function execution never
+    // materialises an unbounded result set into memory.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const to = from + ACTIVE_CAMPAIGN_PAGE_SIZE - 1;
+      const { data, error } = await db
+        .from("campaigns")
+        .select("id, customer_id, smartlead_campaign_id, started_at")
+        .in("status", ["warmup", "sending"])
+        .order("id", { ascending: true })
+        .range(from, to);
+      if (error) throw error;
+      const page = (data ?? []) as ActiveCampaign[];
+      collected.push(...page);
+      if (page.length < ACTIVE_CAMPAIGN_PAGE_SIZE) break;
+      from += ACTIVE_CAMPAIGN_PAGE_SIZE;
+    }
+    return collected;
   });
 
   const today = new Date().toISOString().slice(0, 10);
@@ -106,5 +124,8 @@ export async function runPerformanceDailyPull({ step }: PerformancePullCtx) {
 export const performanceDailyPull = inngest.createFunction(
   { id: "performance-daily-pull", name: "Performance daily pull" },
   { cron: "TZ=UTC 30 6 * * *" }, // 06:30 UTC daily
-  runPerformanceDailyPull as unknown as Parameters<typeof inngest.createFunction>[2],
+  // Thin adapter: Inngest passes the real ctx (typecheck enforces shape),
+  // we narrow to the subset our pure function needs. Avoids the previous
+  // `unknown as Parameters[2]` double-cast that bypassed the type system.
+  async ({ step }) => runPerformanceDailyPull({ step: step as PerformancePullCtx["step"] }),
 );

@@ -114,7 +114,10 @@ export async function runSendBatchGenerate({ event, step }: SendBatchCtx) {
         .eq("campaign_id", campaign.id)
         .eq("status", "approved")
         .neq("id", batchId);
-      if (error) return false;
+      // Re-throw on transient DB error so Inngest retries this step (≤3 attempts
+      // w/ exponential backoff). Silent-dropping the funnel event would permanently
+      // lose `sequence_activated` for a customer's first approved batch.
+      if (error) throw error;
       return (count ?? 0) === 0;
     });
 
@@ -136,5 +139,9 @@ export async function runSendBatchGenerate({ event, step }: SendBatchCtx) {
 export const sendBatchGenerate = inngest.createFunction(
   { id: "send-batch-generate", name: "Daily send batch generation + approval" },
   { event: "send_batch/generate" },
-  runSendBatchGenerate as unknown as Parameters<typeof inngest.createFunction>[2],
+  async ({ event, step }) =>
+    runSendBatchGenerate({
+      event: event as SendBatchCtx["event"],
+      step: step as unknown as SendBatchCtx["step"],
+    }),
 );

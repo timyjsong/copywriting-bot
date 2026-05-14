@@ -1,0 +1,9 @@
+process.env.NODE_ENV = "test";
+process.env.ANTHROPIC_API_KEY ??= "test-anthropic-key";
+process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-supabase-key";
+process.env.STRIPE_SECRET_KEY ??= "sk_test_dummy";
+process.env.STRIPE_WEBHOOK_SECRET ??= "whsec_dummy";
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "anon-test";
+process.env.SMARTLEAD_API_KEY ??= "test-smartlead-key";
+process.env.SMARTLEAD_BASE_URL ??= "https://server.smartlead.ai/api/v1";

@@ -1,19 +1,19 @@
 # Session Continuity
 
-Updated: 2026-05-14T17:05:00Z
+Updated: 2026-05-14T18:18:00Z
 
 ## Current State
 
-- Iteration: 7
+- Iteration: 8
 - Phase: PHASE_2_PAID_FLOW
 - RARV Step: VERIFY
 - Provider: claude
-- Elapsed: 2h 0m
+- Elapsed: 3h 11m
 
 ## Last Completed Task
 
-- Last commit: Loki iter 7: replace source-grep funnel tests with behavioral tests; refactor Inngest fns for testability
-- Files changed: packages/inngest/src/functions/{onboarding,sendBatch,performance}.ts, packages/inngest/src/functions/funnel-events.test.ts, .loki/CONTINUITY.md
+- Iter 8: address iter 7 code-review findings (4 High, 4 Medium, 1 Low)
+- Files changed: packages/inngest/src/functions/{onboarding,sendBatch,performance}.ts, packages/inngest/src/functions/funnel-events.test.ts, packages/inngest/vitest.{config,setup}.ts
 
 ## Active Blockers
 
@@ -21,26 +21,26 @@ Updated: 2026-05-14T17:05:00Z
 
 ## Next Up
 
-- PostHog funnel tracking (continue beyond initial wiring; verify in PostHog dashboard)
-- Stripe Checkout integration ($297 one-time) — verify already-scaffolded flow end-to-end
-- Onboarding wizard deepening (5 steps)
+- PostHog funnel tracking — remaining wiring beyond the 6 events already fired (Roast tool funnel, checkout funnel)
+- Stripe Checkout integration deepening (currently scaffolded)
+- Stage Phase 3 (Send Infrastructure) work
 
 ## Key Decisions This Session
 
-- Iter 7: Refactored `onboardingPipeline`, `sendBatchGenerate`, `performanceDailyPull` to export their inner async handlers (`runOnboardingPipeline`, etc.). The wrapping `inngest.createFunction(...)` calls remain unchanged. This is required to write behavioral tests for the funnel-event emission logic without spinning up an Inngest dev server.
-- Iter 7: Kept funnel-emit logic inline in each orchestrator rather than extracting a helper (code review suggested extracting). Reason: scope discipline — the test refactor is already large; a helper extraction can land in a follow-up if drift emerges.
+- **Iter 8.** Replaced `as unknown as Parameters<typeof inngest.createFunction>[2]` double-casts with thin adapter closures (`async ({event, step}) => runX({...})`) on all three functions. Inngest now type-checks the handler shape; the boundary cast is narrowed to just `event`/`step` so future drift surfaces at compile time.
+- **Iter 8.** `list-active-campaigns` paginates via Supabase `.range(from, to)` with `ACTIVE_CAMPAIGN_PAGE_SIZE = 200`. Loop terminates on short page. Mitigates the unbounded-memory finding from `performance-oracle`.
+- **Iter 8.** `count-prior-approved-batches` re-throws on DB error instead of silently returning `false`. Inngest retries the step (≤3 attempts). Trade-off: a permanent DB outage now fails the function rather than silently dropping `sequence_activated` — preferred per PRD §8 (no silent data loss).
+- **Iter 8.** Test env vars hoisted from `funnel-events.test.ts` module-top into `packages/inngest/vitest.setup.ts` (referenced by new `vitest.config.ts`). Mirrors the pattern in `packages/agents/`. No more leakage across test files.
+- **Iter 8.** Mock query builders for `send_batches` discriminate by chain shape (`select(...,{head,count})` vs `insert(...).single()` vs `update().eq()`) explicitly — no `_kind` side-channel. Tests now assert which chain ran, so prod reordering can't quietly flip the test into the wrong branch.
+- **Iter 8.** All approval tests now assert apply-decision DB writes — `approvals_queue` and `sequences`/`send_batches` rows must carry `status`, `operator_action`, `operator_notes`, `decided_at`. A regression that dropped the rejection write would now fail.
+- **Iter 8.** Added explicit `trigger_free_rewrite` branch coverage: asserts `step.sendEvent("free-rewrite-<id>", { name:"rewrite/requested", data:{customer_id, sequence_id:""}})` fires for the missing-target campaign only.
+- **Iter 8.** Step-ID uniqueness assertions across onboarding/sendBatch/performance (Inngest enforces uniqueness at runtime; cheap to catch in tests).
 
 ## Mistakes & Learnings
 
-- **Source-grep tests are not behavioral tests.** Reading sibling `.ts` files with `readFileSync` and asserting on substrings or regexes against the source is brittle (cosmetic refactors break them) AND vacuous (real regressions slip through unchanged). 3/3 code reviewers in iter 6 unanimously rejected this pattern. Always test behavior: mock dependencies at the boundary, invoke the function, assert on call args and observable side effects. **Applied in iter 7.**
-- **Inngest functions need their inner handlers exported for unit tests.** `inngest.createFunction(...)` returns an opaque object whose handler can't be invoked directly without the Inngest runtime. The clean pattern: define `export async function runFoo(ctx) {...}` separately, then pass it as the handler to `createFunction`. Tests then import `runFoo` and call it with a fake `step` that runs callbacks inline. **Applied in iter 7.**
-- **`vi.hoisted` requirement** (iter 5): mock factory closures must be created via `vi.hoisted(() => ({ ... }))` so they are hoisted above the `vi.mock` calls. Plain `const x = vi.fn()` references will throw `ReferenceError` because `vi.mock` is hoisted to the top of the file.
-- **Strict-mode indexing** (iter 5): tuple/array index access under `noUncheckedIndexedAccess` requires explicit narrowing. Casting `as unknown as [type1, type2, type3]` is the standard escape hatch for `mock.calls[N]` arg access.
-- **`cwd` pitfall in vitest** (iter 5): tests resolving paths via `import.meta.url` (e.g., `readFileSync(join(here, "../foo"))`) break when test layout shifts. Prefer imports + behavioral mocks over filesystem reads — and avoid `readFileSync` in tests entirely.
-- **Fail-closed on `count-prior-approved-batches` DB error** (iter 6): `if (error) return false;` treats query failure as "not first," which under-emits `sequence_activated`. This is intentional fail-closed behavior (better to miss a funnel event than fire it twice), but it's silently swallowed — flag to Sentry in a follow-up. Now covered by a regression test in iter 7.
+- **Iter 8 (caught & fixed).** First version of paginated-campaigns mock recreated the page counter inside each `.from("campaigns")` callback, so the production while-loop never saw an empty page → infinite loop → OOM during vitest run. Fix: hoist the page index outside the `.from()` factory (`makePaginatedCampaignsMock` helper) so successive calls advance through `pages`.
+- **Iter 8.** When changing fail-closed semantics from "swallow & return false" to "throw and let Inngest retry," the existing test asserted the swallow behavior — had to flip the assertion to `rejects.toThrow(...)` AND verify no funnel event was sent. Don't change prod semantics without updating the test that pins them.
 
-## Next Improvement Ideas
+## Open from Iter 7 Code Review — Punt List
 
-- Extract `emitFunnel(step, stepId, customerId, eventName, props)` helper (arch review suggestion). Defer until 3rd funnel-emission site adds drift risk.
-- Add Sentry/observability call on the `count-prior-approved-batches` DB-error branch so silent under-emission is visible.
-- Add a top-level integration test that runs through Stripe webhook → onboarding completion → rewrite approval → batch approval, verifying the full funnel event sequence fires once in order.
+- **architecture-strategist (High).** "Dependency-inversion violation: `runX` still calls `serviceClient()` directly." A real DI seam (pass `db` into runX) is a larger refactor across all three functions + downstream Phase 3 code. Punted to a follow-up iter so this one stays focused on the more pressing test-coverage and scalability gaps.

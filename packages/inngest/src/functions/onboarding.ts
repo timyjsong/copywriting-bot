@@ -142,5 +142,9 @@ export async function runOnboardingPipeline({ event, step }: OnboardingPipelineC
 export const onboardingPipeline = inngest.createFunction(
   { id: "onboarding-pipeline", name: "Customer onboarding pipeline" },
   { event: "onboarding/completed" },
-  runOnboardingPipeline as unknown as Parameters<typeof inngest.createFunction>[2],
+  async ({ event, step }) =>
+    runOnboardingPipeline({
+      event: event as OnboardingPipelineCtx["event"],
+      step: step as unknown as OnboardingPipelineCtx["step"],
+    }),
 );
