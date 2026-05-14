@@ -3,11 +3,13 @@ import { serviceClient } from "@copywriting-bot/db/client";
 import { smartlead, performance } from "@copywriting-bot/agents";
 import { emitFunnelEvent, type FunnelStep } from "./_funnel.js";
 import { listActiveCampaignsPaginated, type ActiveCampaign } from "./_campaigns.js";
+import type { DbPort } from "./_db.js";
 
 export type PerformancePullCtx = {
   step: FunnelStep & {
     sendEvent: (id: string, payload: { name: string; data: object }) => Promise<unknown>;
   };
+  db?: DbPort;
 };
 
 /**
@@ -15,8 +17,8 @@ export type PerformancePullCtx = {
  * active campaign, persists a performance_snapshot row, and triggers the
  * 21-day milestone if uplift target missed (PRD §4.2 step 6, §6.1).
  */
-export async function runPerformanceDailyPull({ step }: PerformancePullCtx) {
-  const db = serviceClient();
+export async function runPerformanceDailyPull({ step, db: dbOverride }: PerformancePullCtx) {
+  const db = dbOverride ?? serviceClient();
 
   const campaigns: ActiveCampaign[] = await step.run("list-active-campaigns", () =>
     listActiveCampaignsPaginated(db),

@@ -1,10 +1,18 @@
 import { vi } from "vitest";
+import type { DbPort } from "../functions/_db.js";
 
 /**
- * Consolidated Supabase test fake. Each table is configured up-front with
- * what it should return for the query shapes the production code uses. All
- * write side-effects are captured on the returned `recorded` object so tests
- * can assert exactly what was written.
+ * Test-only DB + step fakes for Inngest function unit tests.
+ *
+ * Located in `src/test-utils/` (not `src/functions/`) so the structural
+ * separation prevents an accidental production import from pulling
+ * `vi` (vitest) into a runtime bundle. Vitest's `include` only matches
+ * `*.test.{ts,tsx}` so this file is never collected as a test itself.
+ *
+ * Each table is configured up-front with what it should return for the
+ * query shapes the production code uses. All write side-effects are
+ * captured on the returned `recorded` object so tests can assert exactly
+ * what was written.
  *
  * Supported query shapes (auto-detected by which chain methods were called):
  *
@@ -43,7 +51,8 @@ export type Recorded = {
 };
 
 export type SupabaseFake = {
-  serviceClient: () => { from: (table: string) => unknown };
+  /** Returns the fake `DbPort` instance the production code can be handed. */
+  db: DbPort;
   recorded: Recorded;
 };
 
@@ -69,6 +78,11 @@ export function makeSupabaseFake(tables: Record<string, TableConfig>): SupabaseF
     let pendingValues: Record<string, unknown> | null = null;
     const eqArgs: Array<[string, unknown]> = [];
     const neqArgs: Array<[string, unknown]> = [];
+    // Idempotency guard: `.then(...)` may run more than once if a test
+    // accidentally awaits the same builder twice. Without this flag, every
+    // re-await would re-push to `recorded.*`, silently doubling write-count
+    // assertions and masking the foot-gun.
+    let recorded_once = false;
 
     const builder: Record<string, unknown> = {};
 
@@ -92,7 +106,10 @@ export function makeSupabaseFake(tables: Record<string, TableConfig>): SupabaseF
       pendingValues = values;
       // upsert resolves immediately when awaited (no .then chain needed)
       return Promise.resolve(cfg.upsert ?? { data: null, error: null }).then((r) => {
-        (recorded.upsert[table] ??= []).push({ values: pendingValues ?? {}, eqArgs, neqArgs });
+        if (!recorded_once) {
+          (recorded.upsert[table] ??= []).push({ values: pendingValues ?? {}, eqArgs, neqArgs });
+          recorded_once = true;
+        }
         return r;
       });
     });
@@ -120,15 +137,24 @@ export function makeSupabaseFake(tables: Record<string, TableConfig>): SupabaseF
     });
     builder.then = (resolve: (v: unknown) => unknown) => {
       if (mode === "insert") {
-        (recorded.insert[table] ??= []).push({ values: pendingValues ?? {}, eqArgs, neqArgs });
+        if (!recorded_once) {
+          (recorded.insert[table] ??= []).push({ values: pendingValues ?? {}, eqArgs, neqArgs });
+          recorded_once = true;
+        }
         return Promise.resolve(cfg.insert ?? { data: null, error: null }).then(resolve);
       }
       if (mode === "update") {
-        (recorded.update[table] ??= []).push({ values: pendingValues ?? {}, eqArgs, neqArgs });
+        if (!recorded_once) {
+          (recorded.update[table] ??= []).push({ values: pendingValues ?? {}, eqArgs, neqArgs });
+          recorded_once = true;
+        }
         return Promise.resolve(cfg.update ?? { data: null, error: null }).then(resolve);
       }
       if (mode === "count") {
-        (recorded.count[table] ??= []).push({ eqArgs, neqArgs });
+        if (!recorded_once) {
+          (recorded.count[table] ??= []).push({ eqArgs, neqArgs });
+          recorded_once = true;
+        }
         return Promise.resolve(cfg.count ?? { count: 0, error: null }).then(resolve);
       }
       if (mode === "range") {
@@ -145,7 +171,7 @@ export function makeSupabaseFake(tables: Record<string, TableConfig>): SupabaseF
   }
 
   return {
-    serviceClient: () => ({ from: (table: string) => build(table) }),
+    db: { from: (table: string) => build(table) } as unknown as DbPort,
     recorded,
   };
 }

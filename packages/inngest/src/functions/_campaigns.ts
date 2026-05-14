@@ -1,6 +1,4 @@
-import { serviceClient } from "@copywriting-bot/db/client";
-
-type DbClient = ReturnType<typeof serviceClient>;
+import type { DbPort } from "./_db.js";
 
 export type ActiveCampaign = {
   id: string;
@@ -20,7 +18,7 @@ export const ACTIVE_CAMPAIGN_PAGE_SIZE = 200;
  * a full page followed by zero rows) is exercised by tests.
  */
 export async function listActiveCampaignsPaginated(
-  db: DbClient,
+  db: DbPort,
   pageSize: number = ACTIVE_CAMPAIGN_PAGE_SIZE,
 ): Promise<ActiveCampaign[]> {
   const collected: ActiveCampaign[] = [];

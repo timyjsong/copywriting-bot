@@ -1,6 +1,7 @@
 import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { emitFunnelEvent, type FunnelStep } from "./_funnel.js";
+import type { DbPort } from "./_db.js";
 
 /**
  * sendBatchGenerate — when an approved sequence's campaign needs a daily
@@ -22,11 +23,12 @@ export type SendBatchCtx = {
       opts: { event: string; timeout: string; if: string },
     ) => Promise<{ data: { decision: string; notes?: string | null } } | null>;
   };
+  db?: DbPort;
 };
 
-export async function runSendBatchGenerate({ event, step }: SendBatchCtx) {
+export async function runSendBatchGenerate({ event, step, db: dbOverride }: SendBatchCtx) {
   const { campaign_id, batch_date } = event.data;
-  const db = serviceClient();
+  const db = dbOverride ?? serviceClient();
 
   const campaign = await step.run("load-campaign", async () => {
     const { data, error } = await db

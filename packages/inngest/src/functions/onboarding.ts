@@ -2,6 +2,7 @@ import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { rewrite, brandVoice } from "@copywriting-bot/agents";
 import { emitFunnelEvent, type FunnelStep } from "./_funnel.js";
+import type { DbPort } from "./_db.js";
 
 /**
  * onboardingPipeline — durable workflow that runs after a customer completes
@@ -24,11 +25,12 @@ export type OnboardingPipelineCtx = {
       opts: { event: string; timeout: string; if: string },
     ) => Promise<{ data: { decision: string; notes?: string | null } } | null>;
   };
+  db?: DbPort;
 };
 
-export async function runOnboardingPipeline({ event, step }: OnboardingPipelineCtx) {
+export async function runOnboardingPipeline({ event, step, db: dbOverride }: OnboardingPipelineCtx) {
   const { customer_id, sequence_id } = event.data;
-  const db = serviceClient();
+  const db = dbOverride ?? serviceClient();
 
   // Step 1: fetch sequence + brand voice scrape
   const sequence = await step.run("load-sequence", async () => {
@@ -38,6 +40,7 @@ export async function runOnboardingPipeline({ event, step }: OnboardingPipelineC
       .eq("id", sequence_id)
       .single();
     if (error) throw error;
+    if (!data) throw new Error("Sequence not found");
     return data;
   });
 
