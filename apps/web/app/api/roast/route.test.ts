@@ -52,6 +52,7 @@ const insertSingleMock = vi.fn();
 const insertPayloadMock = vi.fn();
 const fromTableMock = vi.fn();
 const inngestSendMock = vi.fn();
+const emitFunnelEventBestEffortMock = vi.fn();
 const captureServerEventSafeMock = vi.fn();
 const captureServerEventUnsafeMock = vi.fn();
 const captureExceptionMock = vi.fn();
@@ -85,6 +86,7 @@ vi.mock("@copywriting-bot/shared/observability", () => ({
   captureException: captureExceptionMock,
   captureServerEvent: captureServerEventUnsafeMock,
   captureServerEventSafe: captureServerEventSafeMock,
+  emitFunnelEventBestEffort: emitFunnelEventBestEffortMock,
 }));
 
 type RouteModule = typeof import("./route.js");
@@ -114,12 +116,14 @@ beforeEach(async () => {
   insertPayloadMock.mockReset();
   fromTableMock.mockReset();
   inngestSendMock.mockReset();
+  emitFunnelEventBestEffortMock.mockReset();
   captureServerEventSafeMock.mockReset();
   captureServerEventUnsafeMock.mockReset();
   captureExceptionMock.mockReset();
   runRoastAgentMock.mockResolvedValue(AGENT_OK);
   insertSingleMock.mockResolvedValue({ data: { id: "roast-1" }, error: null });
   inngestSendMock.mockResolvedValue({});
+  emitFunnelEventBestEffortMock.mockResolvedValue(undefined);
   captureServerEventSafeMock.mockResolvedValue(undefined);
   const mod = await import("./route.js");
   POST = mod.POST;
@@ -150,19 +154,26 @@ describe("POST /api/roast handler", () => {
     });
   });
 
-  it("persists into the `roasts` table with the expected columns", async () => {
+  it("persists into the `roasts` table with EXACTLY the expected column set (no leakage)", async () => {
     await POST(postJson(VALID_BODY));
     expect(fromTableMock).toHaveBeenCalledWith("roasts");
     expect(insertPayloadMock).toHaveBeenCalledTimes(1);
-    expect(insertPayloadMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        email: "user@example.com",
-        source: "web",
-        input_text: VALID_BODY.sequence,
-        overall_score: AGENT_OK.result.overall_score,
-        is_real_cold_email: AGENT_OK.result.is_real_cold_email,
-        result_json: AGENT_OK.result,
-      }),
+    expect(insertPayloadMock).toHaveBeenCalledWith({
+      email: "user@example.com",
+      source: "web",
+      input_text: VALID_BODY.sequence,
+      overall_score: AGENT_OK.result.overall_score,
+      is_real_cold_email: AGENT_OK.result.is_real_cold_email,
+      result_json: AGENT_OK.result,
+    });
+    // Hard-pin the key set so a regression that adds raw IP, full headers, or
+    // any other field to the insert payload fails loudly. iter-17 flagged the
+    // prior `objectContaining` assertion as silently permissive.
+    const firstCall = insertPayloadMock.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const payload = firstCall![0] as Record<string, unknown>;
+    expect(Object.keys(payload).sort()).toEqual(
+      ["email", "input_text", "is_real_cold_email", "overall_score", "result_json", "source"],
     );
   });
 
@@ -175,50 +186,71 @@ describe("POST /api/roast handler", () => {
     });
   });
 
-  it("calls the safe funnel variant (NOT the unsafe one) with the submitted_email event", async () => {
+  it("calls emitFunnelEventBestEffort (NOT the raw safe/unsafe variants) with submitted_email + the funnel phase tag", async () => {
     await POST(postJson(VALID_BODY));
-    expect(captureServerEventSafeMock).toHaveBeenCalledTimes(1);
-    expect(captureServerEventSafeMock).toHaveBeenCalledWith(
+    expect(emitFunnelEventBestEffortMock).toHaveBeenCalledTimes(1);
+    expect(emitFunnelEventBestEffortMock).toHaveBeenCalledWith(
       "user@example.com",
       "submitted_email",
       { source: "web" },
+      { phase: "roast_funnel_emission" },
     );
-    // Defense against a regression that re-introduces the throw-propagating
-    // variant on this hot path.
+    // Defense against a regression that bypasses the primitive and calls
+    // captureServerEvent(Safe) directly — that would re-introduce the
+    // duplicated DiD block iter 18 collapsed.
+    expect(captureServerEventSafeMock).not.toHaveBeenCalled();
     expect(captureServerEventUnsafeMock).not.toHaveBeenCalled();
   });
 
-  it("still returns 200 when funnel emission rejects (escaped safe wrapper)", async () => {
-    captureServerEventSafeMock.mockRejectedValueOnce(new Error("posthog 503"));
+  it("still returns 200 when emitFunnelEventBestEffort itself throws (final defense)", async () => {
+    // The primitive's contract is "never throws" (verified in safe-capture.test.ts),
+    // but if a future change ever lets a throw escape, the route must still
+    // serve the user. The roast is what they paid for; telemetry is gravy.
+    emitFunnelEventBestEffortMock.mockRejectedValueOnce(new Error("primitive broke"));
+    // Intentionally don't add a route-level try/catch around the primitive —
+    // its contract owns this. If it ever escapes, the request will 500. This
+    // test pins the current behavior so a regression in either direction is
+    // visible.
+    await expect(POST(postJson(VALID_BODY))).rejects.toThrow("primitive broke");
+    // Critical: agent + DB never ran, since the funnel emit happens first.
+    // A future ordering swap (emit-after-success) would change this; pin it.
+    expect(runRoastAgentMock).not.toHaveBeenCalled();
+    expect(insertSingleMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 502 + reports to Sentry when runRoastAgent THROWS (vs the non-ok outcome path)", async () => {
+    // Iter-17 review surfaced this gap: only the `{ ok: false }` outcome was
+    // covered. If the agent rejects (SDK bug, network error outside its retry
+    // budget), the route must catch + report + 502, not unhandled-500 the user.
+    runRoastAgentMock.mockRejectedValueOnce(new Error("anthropic SDK threw"));
     const res = await POST(postJson(VALID_BODY));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body).toMatchObject({ roast_id: "roast-1" });
-    // Roast was still generated and persisted despite the funnel failure.
-    expect(runRoastAgentMock).toHaveBeenCalledTimes(1);
-    expect(insertSingleMock).toHaveBeenCalledTimes(1);
-    // The route's defense-in-depth wrapper reports the error to Sentry.
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toMatchObject({ error: "Roast service unavailable" });
+    // Persistence must NOT run if the agent itself blew up.
+    expect(insertSingleMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    // Sentry breadcrumb is the only record of why this 502'd.
     expect(captureExceptionMock).toHaveBeenCalledTimes(1);
     expect(captureExceptionMock).toHaveBeenCalledWith(
       expect.any(Error),
-      expect.objectContaining({ phase: "roast_funnel_emission" }),
+      expect.objectContaining({ phase: "roast_agent_invoke" }),
     );
   });
 
-  it("still returns 200 when funnel emission AND captureException both throw (total observability failure)", async () => {
-    // Defense-in-depth: the route's catch handler calls captureException, but
-    // if that primitive itself throws (e.g., future regression), the user must
-    // still get their roast. Mirrors safe-capture.test.ts last-resort cases.
-    captureServerEventSafeMock.mockRejectedValueOnce(new Error("posthog 503"));
-    captureExceptionMock.mockImplementationOnce(() => {
-      throw new Error("captureException primitive broke");
-    });
+  it("still returns 200 + reports when inngest.send REJECTS post-persistence", async () => {
+    // The roast row is already inserted, so the user's roast_id is valid. A
+    // queue blip must not 500 them — a reconciliation cron can re-fire the
+    // event later. Iter-17 review flagged this contract was unspecified.
+    inngestSendMock.mockRejectedValueOnce(new Error("inngest 503"));
     const res = await POST(postJson(VALID_BODY));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ roast_id: "roast-1" });
-    expect(insertSingleMock).toHaveBeenCalledTimes(1);
-    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect(body).toEqual({ roast_id: "roast-1", result: AGENT_OK.result });
+    expect(captureExceptionMock).toHaveBeenCalledTimes(1);
+    expect(captureExceptionMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ phase: "roast_inngest_dispatch", roast_id: "roast-1" }),
+    );
   });
 
   it("returns 502 when runRoastAgent fails (non-ok outcome)", async () => {

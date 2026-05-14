@@ -137,3 +137,33 @@ export function track(distinctId: string, event: FunnelEvent, properties: Record
   if (!ph) return;
   ph.capture({ distinctId, event, properties });
 }
+
+/**
+ * Route-handler primitive for "emit a funnel event after success-defining work,
+ * but never let it fail the user's request." Composes the bulletproofed
+ * `captureServerEventSafe` and `captureException` primitives so callers stop
+ * re-implementing the policy at every site. Iter 17 had this pattern duplicated
+ * in two routes; iter 18 collapses it here.
+ *
+ * Contract: never throws. Telemetry is gravy; the user's 200 is sacred.
+ *
+ * The `phase` tag (e.g. `"roast_funnel_emission"`) becomes a Sentry scope tag
+ * so dropped events are correlatable to the call site.
+ */
+export async function emitFunnelEventBestEffort(
+  distinctId: string,
+  event: FunnelEvent,
+  properties: Record<string, unknown>,
+  ctx: { phase: string },
+): Promise<void> {
+  try {
+    await captureServerEventSafe(distinctId, event, properties);
+  } catch (err) {
+    // captureServerEventSafe is documented to never throw, but it composes the
+    // deeper captureException primitive. If a future change ever lets it
+    // escape, captureException is itself bulletproofed (its outer try/catch
+    // swallows Sentry-down + stderr-down), so this single call is the entire
+    // last-resort layer. No nested try/catch needed.
+    captureException(err, { phase: ctx.phase });
+  }
+}

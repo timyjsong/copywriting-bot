@@ -3,7 +3,7 @@ import { z } from "zod";
 import { reviewOnboardingPayload } from "@copywriting-bot/agents/onboarder";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { inngest } from "@copywriting-bot/inngest/client";
-import { captureException, captureServerEventSafe } from "@copywriting-bot/shared/observability";
+import { captureException, emitFunnelEventBestEffort } from "@copywriting-bot/shared/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,32 +89,30 @@ export async function POST(req: Request) {
       })
       .eq("id", customerId);
 
-    await inngest.send({
-      name: "onboarding/completed",
-      data: { customer_id: customerId, sequence_id: sequence.id },
-    });
-
     sequenceId = sequence.id;
   } catch (err) {
     captureException(err, { phase: "onboarding_dispatch" });
     return NextResponse.json({ error: "Onboarding failed" }, { status: 500 });
   }
 
-  // Funnel emission is best-effort and runs *after* the success-defining work
-  // (insert + inngest dispatch). Even if the safe wrapper escapes its own
-  // try/catch (Sentry down, etc.), the user gets their 200. The inner
-  // try/catch defends against captureException itself throwing — bulletproofed
-  // at the primitive but we double-guard at the boundary.
+  // Inngest dispatch is best-effort post-persistence: the sequence row is the
+  // success-defining artifact. A reconciliation cron can re-fire missed
+  // `onboarding/completed` events. Never 500 the customer for a queue blip.
   try {
-    await captureServerEventSafe(customerId, "onboarding_completed", { customer_id: customerId });
+    await inngest.send({
+      name: "onboarding/completed",
+      data: { customer_id: customerId, sequence_id: sequenceId },
+    });
   } catch (err) {
-    try {
-      captureException(err, { phase: "onboarding_funnel_emission" });
-    } catch {
-      // eslint-disable-next-line no-console
-      console.error("[copywriting-bot] onboarding funnel: total observability failure", err);
-    }
+    captureException(err, { phase: "onboarding_inngest_dispatch", customer_id: customerId });
   }
+
+  await emitFunnelEventBestEffort(
+    customerId,
+    "onboarding_completed",
+    { customer_id: customerId },
+    { phase: "onboarding_funnel_emission" },
+  );
 
   return NextResponse.json({ ok: true, customer_id: customerId, sequence_id: sequenceId });
 }

@@ -17,6 +17,7 @@ const customerLookupMaybeSingleMock = vi.fn();
 const customerUpdateEqMock = vi.fn();
 const reviewMock = vi.fn();
 const inngestSendMock = vi.fn();
+const emitFunnelEventBestEffortMock = vi.fn();
 const captureServerEventSafeMock = vi.fn();
 const captureExceptionMock = vi.fn();
 
@@ -58,6 +59,7 @@ vi.mock("@copywriting-bot/inngest/client", () => ({
 vi.mock("@copywriting-bot/shared/observability", () => ({
   captureException: captureExceptionMock,
   captureServerEventSafe: captureServerEventSafeMock,
+  emitFunnelEventBestEffort: emitFunnelEventBestEffortMock,
 }));
 
 type RouteModule = typeof import("./route.js");
@@ -70,11 +72,13 @@ beforeEach(async () => {
   customerUpdateEqMock.mockReset();
   reviewMock.mockReset();
   inngestSendMock.mockReset();
+  emitFunnelEventBestEffortMock.mockReset();
   captureServerEventSafeMock.mockReset();
   captureExceptionMock.mockReset();
   reviewMock.mockReturnValue({ ok: true });
   customerUpdateEqMock.mockResolvedValue({ data: null, error: null });
   inngestSendMock.mockResolvedValue({});
+  emitFunnelEventBestEffortMock.mockResolvedValue(undefined);
   captureServerEventSafeMock.mockResolvedValue(undefined);
   const mod = await import("./route.js");
   POST = mod.POST;
@@ -196,54 +200,41 @@ describe("POST /api/onboarding", () => {
     await expect(res.json()).resolves.toMatchObject({ error: "DB error persisting sequence" });
   });
 
-  it("calls the safe variant with the funnel payload (wiring)", async () => {
+  it("calls emitFunnelEventBestEffort (NOT the raw safe variant) with onboarding_completed + the funnel phase tag", async () => {
     insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-safe" }, error: null });
     const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
     expect(res.status).toBe(200);
-    expect(captureServerEventSafeMock).toHaveBeenCalledTimes(1);
-    expect(captureServerEventSafeMock).toHaveBeenCalledWith(
+    expect(emitFunnelEventBestEffortMock).toHaveBeenCalledTimes(1);
+    expect(emitFunnelEventBestEffortMock).toHaveBeenCalledWith(
       VALID_UUID,
       "onboarding_completed",
       { customer_id: VALID_UUID },
+      { phase: "onboarding_funnel_emission" },
     );
+    // Defense against a regression that bypasses the primitive and re-introduces
+    // the duplicated DiD block iter 18 collapsed.
+    expect(captureServerEventSafeMock).not.toHaveBeenCalled();
   });
 
-  it("still returns 200 when funnel emission rejects (escaped safe wrapper)", async () => {
-    insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-resilient" }, error: null });
-    // Simulates the worst case where captureServerEventSafe's internal
-    // try/catch was somehow bypassed (e.g., Sentry itself throwing) and the
-    // promise rejects. The route must still return 200 because the
-    // success-defining work (sequence insert + inngest dispatch) is done.
-    captureServerEventSafeMock.mockRejectedValueOnce(new Error("posthog 503"));
-    const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body).toMatchObject({ ok: true, customer_id: VALID_UUID, sequence_id: "seq-resilient" });
-    // The route's defense-in-depth wrapper reports the funnel failure.
-    expect(captureExceptionMock).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ phase: "onboarding_funnel_emission" }),
-    );
-  });
-
-  it("still returns 200 when funnel emission AND captureException both throw (total observability failure)", async () => {
-    insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-bulletproof" }, error: null });
-    captureServerEventSafeMock.mockRejectedValueOnce(new Error("posthog 503"));
-    // Future-regression guard: if captureException ever stops being bulletproof
-    // and throws synchronously, the route must still return the customer's
-    // 200. Mirrors the same case in /api/roast tests.
-    captureExceptionMock.mockImplementationOnce(() => {
-      throw new Error("captureException primitive broke");
-    });
+  it("still returns 200 + reports when inngest.send REJECTS post-persistence", async () => {
+    // The sequence row is already persisted, so the customer's onboarding is
+    // really done. A queue blip must not 500 them — a reconciliation cron can
+    // re-fire the event later. iter-17 review flagged this contract.
+    insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-queue-blip" }, error: null });
+    inngestSendMock.mockRejectedValueOnce(new Error("inngest 503"));
     const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
       ok: true,
       customer_id: VALID_UUID,
-      sequence_id: "seq-bulletproof",
+      sequence_id: "seq-queue-blip",
     });
-    // Success-defining work still happened.
-    expect(insertSingleMock).toHaveBeenCalledTimes(1);
-    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect(captureExceptionMock).toHaveBeenCalledTimes(1);
+    expect(captureExceptionMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ phase: "onboarding_inngest_dispatch", customer_id: VALID_UUID }),
+    );
+    // Funnel still fires after the inngest failure — its own best-effort.
+    expect(emitFunnelEventBestEffortMock).toHaveBeenCalledTimes(1);
   });
 });

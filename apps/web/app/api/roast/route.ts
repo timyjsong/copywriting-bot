@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { runRoastAgent } from "@copywriting-bot/agents/roast";
 import { RoastRequest } from "@copywriting-bot/shared/schemas";
 import { serviceClient } from "@copywriting-bot/db/client";
-import { captureException, captureServerEventSafe } from "@copywriting-bot/shared/observability";
+import { captureException, emitFunnelEventBestEffort } from "@copywriting-bot/shared/observability";
 import { inngest } from "@copywriting-bot/inngest/client";
 
 export const runtime = "nodejs";
@@ -25,25 +25,23 @@ export async function POST(req: Request) {
   }
   const { email, sequence, source } = parsed.data;
 
-  // Funnel emission is best-effort: must never block the roast a user just
-  // pasted in. The safe wrapper already swallows in-flight errors, but if it
-  // ever escapes (Sentry down, etc.) we still want to serve the result.
-  // captureException is bulletproofed at the source but we wrap it again so
-  // any future regression in the primitive can't 500 the user.
-  try {
-    await captureServerEventSafe(email, "submitted_email", { source: source ?? null });
-  } catch (err) {
-    try {
-      captureException(err, { phase: "roast_funnel_emission" });
-    } catch {
-      // Total observability failure — log to stderr and continue. The roast
-      // is what the user paid for; telemetry is gravy.
-      // eslint-disable-next-line no-console
-      console.error("[copywriting-bot] roast funnel: total observability failure", err);
-    }
-  }
+  await emitFunnelEventBestEffort(
+    email,
+    "submitted_email",
+    { source: source ?? null },
+    { phase: "roast_funnel_emission" },
+  );
 
-  const outcome = await runRoastAgent({ sequence, source });
+  let outcome: Awaited<ReturnType<typeof runRoastAgent>>;
+  try {
+    outcome = await runRoastAgent({ sequence, source });
+  } catch (err) {
+    // Agent may throw for unexpected runtime failures (SDK bug, network blip
+    // outside its own retry budget). Pin the contract: report + 502, never
+    // let it 500 the user without a Sentry breadcrumb.
+    captureException(err, { phase: "roast_agent_invoke" });
+    return NextResponse.json({ error: "Roast service unavailable" }, { status: 502 });
+  }
   if (!outcome.ok) {
     return NextResponse.json({ error: outcome.error }, { status: 502 });
   }
@@ -70,11 +68,17 @@ export async function POST(req: Request) {
     );
   }
 
-  // Fire-and-forget side effects (Inngest will retry on failure).
-  await inngest.send({
-    name: "roast/submitted",
-    data: { roast_id: data.id, email, source },
-  });
+  // Inngest dispatch is best-effort: the row is already persisted, so the
+  // user's roast_id is already valid. A reconciliation cron can re-fire any
+  // missed `roast/submitted` events. Never 500 the user for a queue blip.
+  try {
+    await inngest.send({
+      name: "roast/submitted",
+      data: { roast_id: data.id, email, source },
+    });
+  } catch (err) {
+    captureException(err, { phase: "roast_inngest_dispatch", roast_id: data.id });
+  }
 
   return NextResponse.json({ result: outcome.result, roast_id: data.id });
 }
