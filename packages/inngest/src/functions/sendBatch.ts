@@ -1,6 +1,6 @@
 import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
-import { captureServerEvent } from "@copywriting-bot/shared/observability";
+import { emitFunnelEvent, type FunnelStep } from "./_funnel.js";
 
 /**
  * sendBatchGenerate — when an approved sequence's campaign needs a daily
@@ -16,8 +16,7 @@ import { captureServerEvent } from "@copywriting-bot/shared/observability";
 
 export type SendBatchCtx = {
   event: { data: { campaign_id: string; batch_date: string } };
-  step: {
-    run: <T>(id: string, fn: () => Promise<T> | T) => Promise<T>;
+  step: FunnelStep & {
     waitForEvent: (
       id: string,
       opts: { event: string; timeout: string; if: string },
@@ -122,14 +121,18 @@ export async function runSendBatchGenerate({ event, step }: SendBatchCtx) {
     });
 
     if (isFirstApproved) {
-      await step.run("emit-sequence-activated-funnel", async () => {
-        await captureServerEvent(campaign.customer_id, "sequence_activated", {
+      await emitFunnelEvent(
+        step,
+        "emit-sequence-activated-funnel",
+        campaign.customer_id,
+        "sequence_activated",
+        {
           campaign_id: campaign.id,
           sequence_id: campaign.sequence_id,
           first_batch_id: batchId,
           batch_date,
-        });
-      });
+        },
+      );
     }
   }
 

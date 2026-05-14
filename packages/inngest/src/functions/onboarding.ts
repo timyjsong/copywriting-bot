@@ -1,7 +1,7 @@
 import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { rewrite, brandVoice } from "@copywriting-bot/agents";
-import { captureServerEvent } from "@copywriting-bot/shared/observability";
+import { emitFunnelEvent, type FunnelStep } from "./_funnel.js";
 
 /**
  * onboardingPipeline — durable workflow that runs after a customer completes
@@ -18,8 +18,7 @@ import { captureServerEvent } from "@copywriting-bot/shared/observability";
 
 export type OnboardingPipelineCtx = {
   event: { data: { customer_id: string; sequence_id: string } };
-  step: {
-    run: <T>(id: string, fn: () => Promise<T> | T) => Promise<T>;
+  step: FunnelStep & {
     waitForEvent: (
       id: string,
       opts: { event: string; timeout: string; if: string },
@@ -127,12 +126,10 @@ export async function runOnboardingPipeline({ event, step }: OnboardingPipelineC
   });
 
   if (decision.data.decision !== "reject") {
-    await step.run("emit-rewrite-approved-funnel", async () => {
-      await captureServerEvent(customer_id, "rewrite_approved", {
-        sequence_id,
-        approval_id: approvalId,
-        decision: decision.data.decision,
-      });
+    await emitFunnelEvent(step, "emit-rewrite-approved-funnel", customer_id, "rewrite_approved", {
+      sequence_id,
+      approval_id: approvalId,
+      decision: decision.data.decision,
     });
   }
 
