@@ -1,37 +1,37 @@
 # Session Continuity
 
-Updated: 2026-05-14T14:53:00Z
+Updated: 2026-05-14T18:58:00Z
 
 ## Current State
 
-- Iteration: 19
+- Iteration: 20
 - Phase: PHASE_2_PAID_FLOW
-- RARV Step: REFLECT
+- RARV Step: VERIFY
 - Provider: claude
+- Elapsed: 3h 52m
 
 ## Last Completed Task
 
-- Iter 19: close iter-18 code-review gaps on emitFunnelEventBestEffort
-  - Renamed misleading test ("still returns 200…" that actually asserted rejects)
-  - Added symmetric onboarding route pin for primitive-throw
-  - Split `emitFunnelEventBestEffort` into `funnel.ts` so the outer `ctx.phase` catch is testable (same-module calls bypass vi.mock)
-  - Added new `funnel.test.ts` (7 tests) covering happy path, both phase tags on outer-catch, captureException-itself-throws, empty distinctId, empty props, circular ref
-  - Symmetry assertion: emit fired before inngest in roast-inngest-failure test
-  - Negative-space pin: phase tag NOT applied on inner-wrapper escape
-  - Replaced two `try/finally console.error` mutations with `vi.spyOn` auto-restore
-  - JSDoc on funnel.ts documents the (intentional) caller-chosen ordering convention
-- Vitest: 383 passing (was 375; +8 new)
-- Typecheck: clean across all 6 workspaces
+- Iter 20: pin client-side funnel emission contract (posthog-client.ts) — 12 new tests covering trackClient + identifyClient (loaded/unloaded paths, warn-once semantics, exception swallow, server-vs-browser branching). Full suite: 395 passing (was 383).
+- Iter 19: close iter-18 review gaps — testable outer-catch + symmetry pins
+- Iter 18: emitFunnelEventBestEffort primitive — collapse duplicated DiD
 
 ## Active Blockers
 
 - None
-- Pre-existing: `pnpm lint` fails because Next.js's interactive ESLint setup prompt blocks CI in apps/{web,ops}; not introduced by iter 19.
 
 ## Next Up
 
-- PostHog funnel tracking polish — iter 19 closes review gaps; next iter can return to PRD scope (prd-011/012/013: Stripe Checkout, ship-to-prod, onboarding wizard).
+- PostHog funnel tracking (carries — still pending PRD checklist)
+- **Ship to production. This goes live before anything else.**
+- Stripe Checkout integration ($297 one-time)
 
 ## Key Decisions This Session
 
-- **Split `emitFunnelEventBestEffort` into its own module (`packages/shared/src/funnel.ts`).** Reason: a same-module call to `captureServerEventSafe` could not be intercepted by `vi.mock`, leaving the outer `ctx.phase` catch (and the parameter itself) as unverifiable scaffolding. Re-exported from `observability.ts` so caller imports remain stable.
+- Iters 14–19 hardened server-side funnel emission (captureServerEventSafe → emitFunnelEventBestEffort). Iter 20 closes the symmetry by pinning the **client-side** emission contract: silent-init, single-warn dev hint, swallow posthog-js exceptions, server-render safe. Same defense-in-depth pattern, opposite side of the wire.
+- Picked `posthog-client.ts` over a Phase 2 feature push because the recent review-gap audits showed coverage holes on telemetry primitives, and the client-side path was the only remaining untested funnel primitive. Phase 2 feature work moves once the safety net is symmetric.
+
+## Mistakes & Learnings
+
+- 2026-05-14: `debugSpy.mock.calls[0][0]` triggers TS2532 under strict null checks. Use `debugSpy.mock.calls[0]` (typed as possibly-undefined), bind to a local, assert it's defined, then index. Pattern: `const firstCall = debugSpy.mock.calls[0]; expect(firstCall).toBeDefined(); expect(firstCall?.[0]).toContain("…");`
+- Lint blocked by Next.js 16 `next lint` deprecation prompt (interactive). Pre-existing; not introduced this iter. Out of scope.
