@@ -161,22 +161,17 @@ describe("captureServerEventSafe", () => {
   it("does not throw even if console.error itself throws (last-resort log fails)", async () => {
     // captureException's final-fallback log can in theory throw (broken
     // stderr). The wrapper must still resolve so route handlers don't see
-    // a 500.
+    // a 500. Use vi.spyOn (auto-restored between tests) so an unexpected
+    // assertion failure here can't leak the broken console.error into
+    // sibling tests in this file.
     flushMock.mockRejectedValueOnce(new Error("posthog 503"));
-    const origErr = console.error;
-    // eslint-disable-next-line no-console
-    console.error = () => {
+    vi.spyOn(console, "error").mockImplementation(() => {
       throw new Error("stderr broken");
-    };
-    try {
-      const mod = await import("./observability.js");
-      await expect(
-        mod.captureServerEventSafe("user@x.com", "completed_checkout"),
-      ).resolves.toBeUndefined();
-    } finally {
-      // eslint-disable-next-line no-console
-      console.error = origErr;
-    }
+    });
+    const mod = await import("./observability.js");
+    await expect(
+      mod.captureServerEventSafe("user@x.com", "completed_checkout"),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -231,9 +226,15 @@ describe("emitFunnelEventBestEffort", () => {
     ).resolves.toBeUndefined();
     // The inner safe wrapper handles it — Sentry tag is `agent=posthog`, not
     // the funnel phase. The phase tag only kicks in if the safe wrapper itself
-    // escapes (next test).
+    // escapes (see funnel.test.ts).
     expect(sentrySetTagMock).toHaveBeenCalledWith("agent", "posthog");
     expect(sentrySetTagMock).toHaveBeenCalledWith("event", "submitted_email");
+    // Negative-space pin: phase tag is OWNED by the outer catch in
+    // emitFunnelEventBestEffort. On the inner-wrapper path it must NOT fire,
+    // else a future regression that double-tags Sentry from both layers
+    // would slip through. Hard contract: only the call site whose
+    // captureServerEventSafe escapes gets the phase tag.
+    expect(sentrySetTagMock).not.toHaveBeenCalledWith("phase", "roast_funnel_emission");
   });
 
   it("never throws when both PostHog AND Sentry are completely broken (full transport collapse)", async () => {
@@ -246,25 +247,20 @@ describe("emitFunnelEventBestEffort", () => {
     sentryCaptureExceptionMock.mockImplementation(() => {
       throw new Error("sentry down");
     });
-    const origErr = console.error;
-    // eslint-disable-next-line no-console
-    console.error = () => {
+    // Use vi.spyOn (auto-restored between tests) so an unexpected assertion
+    // failure here can't leak the broken console.error into sibling tests.
+    vi.spyOn(console, "error").mockImplementation(() => {
       throw new Error("stderr broken");
-    };
-    try {
-      const mod = await import("./observability.js");
-      await expect(
-        mod.emitFunnelEventBestEffort(
-          "user@x.com",
-          "completed_checkout",
-          {},
-          { phase: "checkout_funnel_emission" },
-        ),
-      ).resolves.toBeUndefined();
-    } finally {
-      // eslint-disable-next-line no-console
-      console.error = origErr;
-    }
+    });
+    const mod = await import("./observability.js");
+    await expect(
+      mod.emitFunnelEventBestEffort(
+        "user@x.com",
+        "completed_checkout",
+        {},
+        { phase: "checkout_funnel_emission" },
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("forwards properties verbatim — no key drops, no key additions", async () => {

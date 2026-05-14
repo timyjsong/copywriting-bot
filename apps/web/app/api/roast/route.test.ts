@@ -202,18 +202,18 @@ describe("POST /api/roast handler", () => {
     expect(captureServerEventUnsafeMock).not.toHaveBeenCalled();
   });
 
-  it("still returns 200 when emitFunnelEventBestEffort itself throws (final defense)", async () => {
-    // The primitive's contract is "never throws" (verified in safe-capture.test.ts),
-    // but if a future change ever lets a throw escape, the route must still
-    // serve the user. The roast is what they paid for; telemetry is gravy.
+  it("propagates if the funnel primitive itself throws — primitive owns the never-throw contract; pins ordering: emit-before-work", async () => {
+    // Contract: emitFunnelEventBestEffort is documented to never throw
+    // (verified in safe-capture.test.ts). The route deliberately has no
+    // local try/catch around it — the primitive owns the contract. If a
+    // future change ever lets a throw escape, the route WILL 500 the user.
+    // This test pins both that propagation behavior AND the call-ordering
+    // (emit-before-work) so any regression is visible.
     emitFunnelEventBestEffortMock.mockRejectedValueOnce(new Error("primitive broke"));
-    // Intentionally don't add a route-level try/catch around the primitive —
-    // its contract owns this. If it ever escapes, the request will 500. This
-    // test pins the current behavior so a regression in either direction is
-    // visible.
     await expect(POST(postJson(VALID_BODY))).rejects.toThrow("primitive broke");
-    // Critical: agent + DB never ran, since the funnel emit happens first.
-    // A future ordering swap (emit-after-success) would change this; pin it.
+    // Ordering pin: agent + DB never ran, since the funnel emit happens
+    // first. A future ordering swap (emit-after-success) would let these
+    // run before the throw — pin against that.
     expect(runRoastAgentMock).not.toHaveBeenCalled();
     expect(insertSingleMock).not.toHaveBeenCalled();
   });
@@ -251,6 +251,10 @@ describe("POST /api/roast handler", () => {
       expect.any(Error),
       expect.objectContaining({ phase: "roast_inngest_dispatch", roast_id: "roast-1" }),
     );
+    // Symmetry pin (mirrors the onboarding equivalent): the funnel emit must
+    // have already fired before inngest dispatch was attempted. Catches an
+    // ordering regression that would skip the emit when inngest blips.
+    expect(emitFunnelEventBestEffortMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns 502 when runRoastAgent fails (non-ok outcome)", async () => {

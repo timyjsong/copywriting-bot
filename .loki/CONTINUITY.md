@@ -1,31 +1,37 @@
 # Session Continuity
 
-Updated: 2026-05-14T18:43:00Z
+Updated: 2026-05-14T14:53:00Z
 
 ## Current State
 
-- Iteration: 18
+- Iteration: 19
 - Phase: PHASE_2_PAID_FLOW
-- RARV Step: VERIFY
+- RARV Step: REFLECT
 - Provider: claude
-- Elapsed: 3h 38m
 
 ## Last Completed Task
 
-- Iter 18: Collapsed duplicated funnel-emission DiD blocks (iter-17 [High] arch finding) into a `emitFunnelEventBestEffort` primitive in packages/shared. Pinned previously-unspecified contracts: `runRoastAgent` throws → 502 + Sentry, `inngest.send` rejects post-persistence → 200 + Sentry (success-defining work already done). Tightened roasts insert payload to exact key-set assertion.
-- Tests: 371 → 380 passing (added agent-throws, inngest-rejects, primitive-level coverage).
+- Iter 19: close iter-18 code-review gaps on emitFunnelEventBestEffort
+  - Renamed misleading test ("still returns 200…" that actually asserted rejects)
+  - Added symmetric onboarding route pin for primitive-throw
+  - Split `emitFunnelEventBestEffort` into `funnel.ts` so the outer `ctx.phase` catch is testable (same-module calls bypass vi.mock)
+  - Added new `funnel.test.ts` (7 tests) covering happy path, both phase tags on outer-catch, captureException-itself-throws, empty distinctId, empty props, circular ref
+  - Symmetry assertion: emit fired before inngest in roast-inngest-failure test
+  - Negative-space pin: phase tag NOT applied on inner-wrapper escape
+  - Replaced two `try/finally console.error` mutations with `vi.spyOn` auto-restore
+  - JSDoc on funnel.ts documents the (intentional) caller-chosen ordering convention
+- Vitest: 383 passing (was 375; +8 new)
+- Typecheck: clean across all 6 workspaces
 
 ## Active Blockers
 
 - None
+- Pre-existing: `pnpm lint` fails because Next.js's interactive ESLint setup prompt blocks CI in apps/{web,ops}; not introduced by iter 19.
 
 ## Next Up
 
-- PostHog funnel tracking (PRD-011)
-- Stripe Checkout integration ($297 one-time)
-- Ship to production
+- PostHog funnel tracking polish — iter 19 closes review gaps; next iter can return to PRD scope (prd-011/012/013: Stripe Checkout, ship-to-prod, onboarding wizard).
 
 ## Key Decisions This Session
 
-- **iter 18**: `emitFunnelEventBestEffort(distinctId, event, props, { phase })` is now the single source of truth for "fire-and-forget funnel event from a route handler." The bulletproofing chain is: PostHog flush → captureServerEventSafe (catches PostHog errors, reports via captureException tagged `agent=posthog`) → emitFunnelEventBestEffort (catches the unreachable case where the safe wrapper escapes, reports via captureException with the funnel `phase` tag) → captureException (bulletproofed at observability.ts:21-45 — Sentry-down + stderr-down both swallowed). Routes call the primitive in one line; never re-implement the policy.
-- Inngest dispatch is now best-effort post-persistence on `/api/roast` and `/api/onboarding`. Reasoning: the row is the success-defining artifact; a queue blip should not 500 the user. A reconciliation cron can re-fire missed events.
+- **Split `emitFunnelEventBestEffort` into its own module (`packages/shared/src/funnel.ts`).** Reason: a same-module call to `captureServerEventSafe` could not be intercepted by `vi.mock`, leaving the outer `ctx.phase` catch (and the parameter itself) as unverifiable scaffolding. Re-exported from `observability.ts` so caller imports remain stable.

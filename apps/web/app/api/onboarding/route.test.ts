@@ -216,6 +216,29 @@ describe("POST /api/onboarding", () => {
     expect(captureServerEventSafeMock).not.toHaveBeenCalled();
   });
 
+  it("propagates if the funnel primitive itself throws — primitive owns the never-throw contract; pins ordering: emit-after-work (sequence already persisted)", async () => {
+    // Mirror of the roast-route pin (apps/web/app/api/roast/route.test.ts).
+    // emitFunnelEventBestEffort is documented to never throw
+    // (verified in safe-capture.test.ts). The route deliberately has no
+    // local try/catch around it — the primitive owns the contract.
+    //
+    // STRICTLY WORSE THAN ROAST: in onboarding, the funnel emit runs AFTER
+    // all success-defining work (sequence insert + inngest dispatch), so an
+    // escape here would 500 a customer whose sequence row is already in the
+    // DB and whose `onboarding/completed` event has already shipped to
+    // Inngest. That double-fire risk is exactly why this pin matters.
+    insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-emit-throws" }, error: null });
+    emitFunnelEventBestEffortMock.mockRejectedValueOnce(new Error("primitive broke"));
+    await expect(POST(postJson(validBody({ customer_id: VALID_UUID })))).rejects.toThrow(
+      "primitive broke",
+    );
+    // Ordering pin: insert + inngest already ran before the funnel emit
+    // threw — the row exists, the event was dispatched. A future ordering
+    // swap (emit-before-work) would change this.
+    expect(insertSingleMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+
   it("still returns 200 + reports when inngest.send REJECTS post-persistence", async () => {
     // The sequence row is already persisted, so the customer's onboarding is
     // really done. A queue blip must not 500 them — a reconciliation cron can
