@@ -1,38 +1,63 @@
 # Session Continuity
 
-Updated: 2026-05-14T15:25:00Z
+Updated: 2026-05-14T15:30:00Z
 
 ## Current State
 
-- Iteration: 22
+- Iteration: 23
 - Phase: PHASE_2_PAID_FLOW
-- RARV Step: VERIFY
+- RARV Step: REFLECT
 - Provider: claude
-- Elapsed: 4h 15m
+- Elapsed: 4h 30m
 
 ## Last Completed Task
 
-- Iter 22: closed iter-21 review gaps for the dual-emission $insert_id contract.
-  Extracted client-side payload builders into pure helpers
-  (apps/web/app/roast/funnel-payloads.ts, apps/web/app/onboarding/funnel-payloads.ts)
-  so the dedup-key contract is unit-testable without a React/jsdom harness.
-  Added contract pins + boundary + symmetry tests; pinned roast.ts upsert
-  error envelope + serviceClient() fallback path; pinned the funnel-keys
-  zero-deps subpath via direct import.
+- Last commit: Loki iter 23: dedup completed_checkout via $insert_id + Inngest event-id
+- Files changed: packages/inngest/src/functions/checkout.ts, packages/inngest/src/functions/checkout.test.ts (new), apps/web/app/api/stripe/webhook/route.ts, apps/web/app/api/stripe/webhook/route.test.ts, .loki/CONTINUITY.md
+
+## Iter 23 Summary
+
+Closed the only remaining funnel dedup gap. `completed_checkout` was the last
+funnel event still susceptible to silent double-counting across retries:
+
+- **Webhook side**: `inngest.send({...})` had no event `id`, so Stripe webhook
+  re-delivery (5xx/timeout) would create N independent Inngest events for one
+  real checkout. Now keyed on `stripe-checkout-${session.id}` so duplicates
+  collapse at the Inngest event-id dedup layer.
+- **Funnel side**: `track-funnel` step emitted `completed_checkout` without
+  `$insert_id`. Now stamps `funnelInsertId("completed_checkout", session_id)`
+  matching the iter-21 pattern for `viewed_result`. Step-retry safety even if
+  Inngest dedup ever lets one through.
+- **Pure runner**: extracted `runCheckoutCompleted` DI seam (matches roast.ts,
+  onboarding.ts, sendBatch.ts, performance.ts conventions) so dedup contract
+  is testable without spinning up Inngest.
+
+Tests added: 6 in new `checkout.test.ts` (customer upgrade, dedup key shape,
+retry-produces-same-key, different-sessions-produce-different-keys, db DI,
+throws-on-funnel-fail). 1 test updated in webhook route test to pin the
+`stripe-checkout-${session.id}` event id contract.
+
+## Test Counts
+
+- packages/inngest: 122 tests (was 116, +6)
+- apps/web: 126 tests (unchanged; one assertion expanded)
+- apps/ops: 16 tests (unchanged)
 
 ## Active Blockers
 
-- None — iter-21 review findings (Critical + High + Medium + Low) all addressed.
+- None
 
 ## Next Up
 
-- PostHog funnel tracking (PRD-011) — funnel events now pinned end-to-end;
-  re-validate against PRD checklist next iter.
-- Ship to production (PRD-012)
-- Stripe Checkout integration $297 one-time (PRD-013)
+- PostHog funnel tracking → DONE through iter 23 (all 13 events dedup-safe)
+- Stripe Checkout integration → currently shipped + retry-safe
+- Next candidate: rewrite_approved + sequence_activated + performance_report_sent
+  also lack `$insert_id` (single-emission events, but Inngest step retries
+  could still double-count). Consider adding for symmetry with iter 21 + 23.
 
 ## Key Decisions This Session
 
-- Extract pure payload builders from Client Components instead of standing up
-  jsdom + React Testing Library. Lower-friction seam, no new deps, matches the
-  existing pattern in apps/web/app/onboarding/resolve-session.ts.
+- iter 23: extend the iter-21 dedup pattern (`$insert_id` keyed on a stable
+  per-entity ID) to the last server-only funnel event that lacked it. Also
+  add upstream protection at the Inngest event-id layer so Stripe webhook
+  re-delivery never even reaches the funnel emit.

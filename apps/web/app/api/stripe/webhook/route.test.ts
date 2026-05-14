@@ -148,6 +148,10 @@ describe("POST /api/stripe/webhook", () => {
     await expect(res.json()).resolves.toEqual({ received: true });
     expect(inngestSendMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        // Event id keyed on stripe session id → Stripe re-delivery dedups
+        // at the Inngest layer (iter 23). Without this, retried webhooks
+        // would fire `completed_checkout` more than once.
+        id: "stripe-checkout-cs_test_1",
         name: "stripe/checkout.completed",
         data: expect.objectContaining({
           stripe_session_id: "cs_test_1",

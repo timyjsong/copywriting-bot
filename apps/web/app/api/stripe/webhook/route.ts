@@ -68,6 +68,11 @@ export async function POST(req: Request) {
         }
 
         await inngest.send({
+          // Stripe re-delivers on 5xx/timeout. Keying the Inngest event on
+          // `session.id` (unique per checkout) makes duplicate deliveries
+          // collapse to a single function run — Inngest's event-id dedup
+          // window catches it before the funnel emit ever sees a retry.
+          id: `stripe-checkout-${session.id}`,
           name: "stripe/checkout.completed",
           data: {
             stripe_session_id: session.id,
