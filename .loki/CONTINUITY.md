@@ -1,52 +1,52 @@
 # Session Continuity
 
-Updated: 2026-05-14T12:30:00Z
+Updated: 2026-05-14T12:44:00Z
 
 ## Current State
 
-- Iteration: 4
+- Iteration: 5
 - Phase: PHASE_2_PAID_FLOW
-- RARV Step: VERIFY (complete; commit pending)
+- RARV Step: VERIFY (green)
 - Provider: claude
-- Elapsed: ~1h 25m
+- Elapsed: ~2h
 
 ## Last Completed Task
 
-- Iter 4: addressed all 14 code-review findings from iter 3
-  - FunnelEvent SSOT: posthog-client now imports the union from shared
-  - observability.test.ts rewritten to defend the real contract (no tautologies)
-  - /api/checkout/resolve: 10 real handler tests (all 8 branches), schema moved to schema.ts (Next.js disallows arbitrary route.ts exports)
-  - /api/dashboard/status: 7 handler tests covering 400/404/500/success with full + partial + null sub-queries
-  - /api/onboarding: 9 tests including the new customer_id branch, precedence, invalid UUID, fallback
-  - Approval helpers (timeAgo/timeUntil/slaOverdue/formatDuration/groupCounts) moved to packages/shared/src/approvals.ts with 22 unit tests (negative/boundary/clock-skew coverage)
-  - ApprovalSummary refactored into a renderer registry (`renderers.tsx`) + normalizer (`normalizeApprovalPayload`) — open/closed; malformed payloads tested
-  - Onboarding resolve loop extracted to resolve-session.ts (testable; AbortController-driven, no leaked setTimeout, max-attempts surfaces explicit error, non-JSON body handled) with 9 tests
+- Loki iter 5: massive test coverage expansion across all agents + ops + boundary routes
+- Tests: 112 → 199 (+87 new)
+- New test files: 11 across rewrite, roast, brand-voice, outbound (+ apollo), support,
+  send-infra (agent + dns), apps/ops /api/refund, apps/ops /api/approvals/[id],
+  apps/web /api/checkout, apps/web /api/stripe/webhook
+- apps/ops now has a vitest config + test runner (was 'echo no tests yet')
 
 ## Active Blockers
 
-- None
-
-## Test counts
-
-- packages/shared: 47 tests (was 25)
-- packages/agents: 21 tests (unchanged)
-- apps/web: 44 tests (was 13)
-- Total: 112 (was 58)
+- None. Tests 199/199, typecheck clean, build green for ops + web.
+- Pre-existing lint failure: `next lint` is deprecated and interactive — affects both apps,
+  not caused by this iteration.
 
 ## Next Up
 
-- PostHog funnel tracking (prd-011) — already partially done in iter 3, verify
-- Stripe Checkout integration deepen (prd-013)
-- Approvals API tests (apps/ops still has no vitest setup)
+- Customer dashboard skeleton (prd-015) — page exists, content is thin
+- Onboarding wizard step-count audit (prd-014) — verify 5 distinct steps
+- Smartlead API integration depth (prd-019)
+- Apollo enrichment depth + signal extraction (prd-024)
 
 ## Key Decisions This Session
 
-- Schemas that need to be imported by tests must live in non-route files; route.ts is reserved for Next.js's allowed exports only.
-- Pure helpers go to packages/shared so they're testable without standing up a per-app vitest. Renderers stay in the app that owns them.
-- The resolve loop uses AbortController + AbortSignal-aware sleep so unmount cancels timers — no `cancelled` flag with leaked setTimeout.
+- Prioritized test coverage over new features after seeing 14 critical/high learnings
+  from iter 3-4 about missing tests on hot-path code (Rewrite/Roast/Brand-Voice/etc).
+- Standard agent-test pattern: hoist mocks via `vi.hoisted(...)`, mock `../client.js`
+  with `vi.importActual` spread so `extractJsonObject` stays real, mock observability.
+  This pattern is now established in 6 agent test files for future agents.
+- Mocked `node:dns.promises` for DNS verification tests instead of hitting real DNS.
+- Mocked Stripe `webhooks.constructEvent` for webhook tests (bypassing signature crypto).
 
 ## Mistakes & Learnings
 
-- Iter 3 mistake: test files that redeclare the schema they're "guarding" provide false coverage. Always import from production. (Caught here; fixed by extracting schema.ts.)
-- Iter 3 mistake: tautological `expect(arr.length).toBe(arr.length)` passes regardless of contents. Always assert against an external invariant.
-- Iter 3 mistake: setTimeout-based retry loops with only a `cancelled` flag leak timers. Use AbortController + AbortSignal-aware sleep.
+- vi.mock factory cannot reference top-level `const` — must use `vi.hoisted()` to share
+  mock fns between vi.mock factories and tests. Caught this on first rewrite test run.
+- `pnpm test --run path` from wrong cwd silently uses workspace runner — always
+  cd into package first when running a single test file.
+- TypeScript strict mode flags `arr[0]` as possibly undefined — use `arr[0]?.foo`
+  in tests when the test already asserts length.

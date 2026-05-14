@@ -65,24 +65,24 @@
   },
   {
     "id": "prd-008-phase5-seo",
-    "title": "Phase 5 — Programmatic SEO seed (page generator + sitemap + robots)",
+    "title": "Phase 5 \u2014 Programmatic SEO seed (page generator + sitemap + robots)",
     "status": "completed",
     "completed_at": "2026-05-14T15:55:00Z",
-    "summary": "apps/web/app/playbook/ — 10 structured long-tail content entries, /playbook index, /playbook/[slug] dynamic page with generateStaticParams + metadata, sitemap.ts + robots.ts surface marketing pages while disallowing /api/dashboard/onboarding/checkout."
+    "summary": "apps/web/app/playbook/ \u2014 10 structured long-tail content entries, /playbook index, /playbook/[slug] dynamic page with generateStaticParams + metadata, sitemap.ts + robots.ts surface marketing pages while disallowing /api/dashboard/onboarding/checkout."
   },
   {
     "id": "prd-009-phase6-refund",
-    "title": "Phase 6 — Refund flow (Stripe webhook + ops API + Inngest)",
+    "title": "Phase 6 \u2014 Refund flow (Stripe webhook + ops API + Inngest)",
     "status": "completed",
     "completed_at": "2026-05-14T15:55:00Z",
-    "summary": "Stripe webhook handles charge.refunded + charge.dispute.created → emits refund/requested; new refundRequested Inngest function gates via operator approval queue; apps/ops/app/api/refund POST route lets operator initiate refunds; customer flipped to 'churned' on approval."
+    "summary": "Stripe webhook handles charge.refunded + charge.dispute.created \u2192 emits refund/requested; new refundRequested Inngest function gates via operator approval queue; apps/ops/app/api/refund POST route lets operator initiate refunds; customer flipped to 'churned' on approval."
   },
   {
     "id": "prd-010-inngest-expansion",
-    "title": "Inngest function expansion — support reply, outbound daily, send-batch generate",
+    "title": "Inngest function expansion \u2014 support reply, outbound daily, send-batch generate",
     "status": "completed",
     "completed_at": "2026-05-14T15:55:00Z",
-    "summary": "supportReplyPipeline (inbound → triage → operator approval, spam-filtered), outboundDailySource (weekday 13:00 UTC cron → loads queued prospects → Outbound Agent → approval queue), sendBatchGenerate (event-driven daily batch with approval gate). 3 new event types added to typed registry."
+    "summary": "supportReplyPipeline (inbound \u2192 triage \u2192 operator approval, spam-filtered), outboundDailySource (weekday 13:00 UTC cron \u2192 loads queued prospects \u2192 Outbound Agent \u2192 approval queue), sendBatchGenerate (event-driven daily batch with approval gate). 3 new event types added to typed registry."
   },
   {
     "id": "prd-test-coverage",
@@ -104,5 +104,30 @@
       "test": "PASS (52/52, +26 vs iter 1)",
       "build": "deferred (no env)"
     }
+  },
+  {
+    "id": "iteration-3",
+    "type": "iteration",
+    "title": "Iteration 3",
+    "status": "completed",
+    "completedAt": "2026-05-14T16:20:03Z",
+    "exitCode": 0,
+    "provider": "claude"
+  },
+  {
+    "id": "iteration-4",
+    "type": "iteration",
+    "title": "Iteration 4",
+    "status": "completed",
+    "completedAt": "2026-05-14T16:31:37Z",
+    "exitCode": 0,
+    "provider": "claude"
+  },
+  {
+    "id": "iteration-5",
+    "title": "Iteration 5",
+    "description": "Test coverage expansion: +87 tests across all agents + ops routes + boundary routes",
+    "completed_at": "2026-05-14T12:44:00Z",
+    "evidence": "199/199 tests pass; typecheck clean; web+ops builds green"
   }
 ]
