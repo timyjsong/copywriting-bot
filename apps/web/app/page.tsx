@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LandingCta } from "./landing-cta";
 
 export default function LandingPage() {
   return (
@@ -27,20 +28,7 @@ export default function LandingPage() {
           stand up dedicated send infrastructure on your domain, and monitor 30
           days of performance. <strong>$297 one-time. No discovery calls.</strong>
         </p>
-        <div className="mt-8 flex flex-wrap gap-3">
-          <Link
-            href="/roast"
-            className="rounded-md bg-ink px-5 py-3 text-cream hover:bg-ink/90"
-          >
-            Get a free roast of your sequence →
-          </Link>
-          <Link
-            href="/pricing"
-            className="rounded-md border border-ink/20 px-5 py-3 hover:bg-ink/5"
-          >
-            See pricing
-          </Link>
-        </div>
+        <LandingCta />
         <p className="mt-3 text-sm text-ink/60">
           21-day reply-rate lift in writing or your money back.
         </p>

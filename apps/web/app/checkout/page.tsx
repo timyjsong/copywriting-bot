@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { identifyClient, trackClient } from "../posthog-client";
 
 export default function CheckoutPage() {
   return (
@@ -23,6 +24,8 @@ function CheckoutInner() {
     ev.preventDefault();
     setStage("redirecting");
     setError(null);
+    trackClient("started_checkout", { from_roast_id: fromRoast ?? null });
+    identifyClient(email, { last_action: "started_checkout" });
     try {
       const res = await fetch("/api/checkout", {
         method: "POST",

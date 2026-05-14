@@ -66,6 +66,7 @@ export type FunnelEvent =
   | "started_checkout"
   | "completed_checkout"
   | "onboarding_started"
+  | "onboarding_step_completed"
   | "onboarding_completed"
   | "rewrite_approved"
   | "sequence_activated"

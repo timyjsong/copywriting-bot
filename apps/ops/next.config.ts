@@ -8,6 +8,15 @@ const config: NextConfig = {
     "@copywriting-bot/db",
     "@copywriting-bot/inngest",
   ],
+  webpack(cfg) {
+    cfg.resolve = cfg.resolve ?? {};
+    cfg.resolve.extensionAlias = {
+      ...(cfg.resolve.extensionAlias ?? {}),
+      ".js": [".ts", ".tsx", ".js"],
+      ".mjs": [".mts", ".mjs"],
+    };
+    return cfg;
+  },
 };
 
 export default config;

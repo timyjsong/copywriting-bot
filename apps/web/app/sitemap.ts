@@ -1,6 +1,5 @@
 import type { MetadataRoute } from "next";
 import { PLAYBOOK } from "./playbook/content";
-import { publicEnv } from "@copywriting-bot/shared/env";
 
 /**
  * Sitemap covering the marketing surface (PRD §7 Phase 5).
@@ -8,9 +7,12 @@ import { publicEnv } from "@copywriting-bot/shared/env";
  * Includes: landing, free tool, pricing, legal pages, playbook index + every
  * playbook entry. App / ops surfaces are intentionally excluded — they require
  * auth and shouldn't be indexed.
+ *
+ * Reads `NEXT_PUBLIC_APP_URL` directly so a missing Supabase env at build time
+ * doesn't break static sitemap generation.
  */
 export default function sitemap(): MetadataRoute.Sitemap {
-  const base = publicEnv().NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
+  const base = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   const now = new Date();
 
   const root: MetadataRoute.Sitemap = [

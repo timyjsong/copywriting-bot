@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { RoastResultT } from "@copywriting-bot/shared/schemas";
 import { dimensionLabel, scoreBand, scoreColor, summariseResult } from "@copywriting-bot/shared/scoring";
+import { identifyClient, trackClient } from "../posthog-client";
 
 type Stage = "idle" | "submitting" | "result" | "error";
 
@@ -15,10 +16,16 @@ export default function RoastPage() {
   const [error, setError] = useState<string | null>(null);
   const [roastId, setRoastId] = useState<string | null>(null);
 
+  useEffect(() => {
+    trackClient("started_roast", { surface: "roast_page" });
+  }, []);
+
   async function submit(ev: React.FormEvent) {
     ev.preventDefault();
     setStage("submitting");
     setError(null);
+    trackClient("submitted_email", { email_domain: email.split("@")[1] ?? null });
+    identifyClient(email, { last_action: "submitted_roast" });
     try {
       const res = await fetch("/api/roast", {
         method: "POST",
@@ -33,6 +40,11 @@ export default function RoastPage() {
       setResult(body.result);
       setRoastId(body.roast_id);
       setStage("result");
+      trackClient("viewed_result", {
+        roast_id: body.roast_id,
+        overall_score: body.result.overall_score,
+        is_real_cold_email: body.result.is_real_cold_email,
+      });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
       setStage("error");
@@ -203,6 +215,13 @@ function RoastResultView({
         </p>
         <Link
           href={`/checkout?from_roast=${roastId ?? ""}`}
+          onClick={() =>
+            trackClient("clicked_upsell", {
+              surface: "roast_result",
+              roast_id: roastId ?? null,
+              overall_score: result.overall_score,
+            })
+          }
           className="mt-6 inline-block rounded-md bg-ink px-5 py-3 text-cream hover:bg-ink/90"
         >
           Start checkout →

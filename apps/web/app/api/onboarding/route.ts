@@ -16,6 +16,7 @@ const RawBody = z.object({
   calendar_url: z.string().url(),
   brand_voice_url: z.string().url(),
   stripe_session_id: z.string().nullable().optional(),
+  customer_id: z.string().uuid().nullable().optional(),
 });
 
 export async function POST(req: Request) {
@@ -35,13 +36,11 @@ export async function POST(req: Request) {
 
   const db = serviceClient();
 
-  // We need the customer_id — look up by stripe session if present, else fail.
-  let customerId: string | null = null;
-  if (parsed.data.stripe_session_id) {
-    // In production we'd resolve session → customer via Stripe API. For MVP we
-    // rely on the webhook having already upserted the customer + the email
-    // path; the wizard form should be reached via redirect from Stripe's
-    // success_url so we trust the session_id presence as a soft signal.
+  // Prefer customer_id passed in by the wizard (resolved client-side via
+  // /api/checkout/resolve). Fall back to the most-recent-onboarding row only
+  // for dev where Stripe webhooks aren't wired.
+  let customerId: string | null = parsed.data.customer_id ?? null;
+  if (!customerId && parsed.data.stripe_session_id) {
     const { data } = await db
       .from("customers")
       .select("id")
