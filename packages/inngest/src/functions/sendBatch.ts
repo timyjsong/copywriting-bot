@@ -13,114 +13,128 @@ import { captureServerEvent } from "@copywriting-bot/shared/observability";
  * wire the actual Smartlead lead upload; this function owns the gate and
  * persistence so the gate primitive is exercised end-to-end.
  */
+
+export type SendBatchCtx = {
+  event: { data: { campaign_id: string; batch_date: string } };
+  step: {
+    run: <T>(id: string, fn: () => Promise<T> | T) => Promise<T>;
+    waitForEvent: (
+      id: string,
+      opts: { event: string; timeout: string; if: string },
+    ) => Promise<{ data: { decision: string; notes?: string | null } } | null>;
+  };
+};
+
+export async function runSendBatchGenerate({ event, step }: SendBatchCtx) {
+  const { campaign_id, batch_date } = event.data;
+  const db = serviceClient();
+
+  const campaign = await step.run("load-campaign", async () => {
+    const { data, error } = await db
+      .from("campaigns")
+      .select("id, customer_id, sequence_id, daily_cap, status, smartlead_campaign_id")
+      .eq("id", campaign_id)
+      .single();
+    if (error || !data) throw error ?? new Error("Campaign not found");
+    return data;
+  });
+
+  if (campaign.status !== "warmup" && campaign.status !== "sending") {
+    return { status: "skipped", reason: `campaign.status=${campaign.status}` };
+  }
+
+  const batchId = await step.run("create-batch", async () => {
+    const { data, error } = await db
+      .from("send_batches")
+      .insert({
+        campaign_id: campaign.id,
+        batch_date,
+        prospect_count: campaign.daily_cap,
+        status: "pending_approval",
+        payload_json: {
+          customer_id: campaign.customer_id,
+          sequence_id: campaign.sequence_id,
+          smartlead_campaign_id: campaign.smartlead_campaign_id,
+        } as unknown as object,
+      })
+      .select("id")
+      .single();
+    if (error || !data) throw error ?? new Error("Could not create send_batch");
+    return data.id;
+  });
+
+  const approvalId = await step.run("create-approval", async () => {
+    const { data, error } = await db
+      .from("approvals_queue")
+      .insert({
+        type: "send_batch",
+        entity_id: batchId,
+        customer_id: campaign.customer_id,
+        payload_json: { campaign_id: campaign.id, batch_date, daily_cap: campaign.daily_cap } as unknown as object,
+        status: "pending",
+      })
+      .select("id")
+      .single();
+    if (error || !data) throw error ?? new Error("Could not create approval");
+    return data.id;
+  });
+
+  const decision = await step.waitForEvent("await-operator-approval", {
+    event: "operator.approval",
+    timeout: "2d",
+    if: `async.data.id == "${approvalId}"`,
+  });
+
+  if (!decision) {
+    await step.run("mark-batch-failed", async () => {
+      await db.from("send_batches").update({ status: "failed" }).eq("id", batchId);
+    });
+    return { status: "timeout", batchId };
+  }
+
+  await step.run("apply-decision", async () => {
+    const finalStatus = decision.data.decision === "reject" ? "rejected" : "approved";
+    await db.from("send_batches").update({
+      status: finalStatus,
+      approved_at: new Date().toISOString(),
+    }).eq("id", batchId);
+    await db.from("approvals_queue").update({
+      status: finalStatus === "rejected" ? "rejected" : "approved",
+      operator_action: decision.data.decision,
+      operator_notes: decision.data.notes ?? null,
+      decided_at: new Date().toISOString(),
+    }).eq("id", approvalId);
+  });
+
+  if (decision.data.decision !== "reject") {
+    const isFirstApproved = await step.run("count-prior-approved-batches", async () => {
+      const { count, error } = await db
+        .from("send_batches")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", campaign.id)
+        .eq("status", "approved")
+        .neq("id", batchId);
+      if (error) return false;
+      return (count ?? 0) === 0;
+    });
+
+    if (isFirstApproved) {
+      await step.run("emit-sequence-activated-funnel", async () => {
+        await captureServerEvent(campaign.customer_id, "sequence_activated", {
+          campaign_id: campaign.id,
+          sequence_id: campaign.sequence_id,
+          first_batch_id: batchId,
+          batch_date,
+        });
+      });
+    }
+  }
+
+  return { status: decision.data.decision, batchId, approvalId };
+}
+
 export const sendBatchGenerate = inngest.createFunction(
   { id: "send-batch-generate", name: "Daily send batch generation + approval" },
   { event: "send_batch/generate" },
-  async ({ event, step }) => {
-    const { campaign_id, batch_date } = event.data;
-    const db = serviceClient();
-
-    const campaign = await step.run("load-campaign", async () => {
-      const { data, error } = await db
-        .from("campaigns")
-        .select("id, customer_id, sequence_id, daily_cap, status, smartlead_campaign_id")
-        .eq("id", campaign_id)
-        .single();
-      if (error || !data) throw error ?? new Error("Campaign not found");
-      return data;
-    });
-
-    if (campaign.status !== "warmup" && campaign.status !== "sending") {
-      return { status: "skipped", reason: `campaign.status=${campaign.status}` };
-    }
-
-    const batchId = await step.run("create-batch", async () => {
-      const { data, error } = await db
-        .from("send_batches")
-        .insert({
-          campaign_id: campaign.id,
-          batch_date,
-          prospect_count: campaign.daily_cap,
-          status: "pending_approval",
-          payload_json: {
-            customer_id: campaign.customer_id,
-            sequence_id: campaign.sequence_id,
-            smartlead_campaign_id: campaign.smartlead_campaign_id,
-          } as unknown as object,
-        })
-        .select("id")
-        .single();
-      if (error || !data) throw error ?? new Error("Could not create send_batch");
-      return data.id;
-    });
-
-    const approvalId = await step.run("create-approval", async () => {
-      const { data, error } = await db
-        .from("approvals_queue")
-        .insert({
-          type: "send_batch",
-          entity_id: batchId,
-          customer_id: campaign.customer_id,
-          payload_json: { campaign_id: campaign.id, batch_date, daily_cap: campaign.daily_cap } as unknown as object,
-          status: "pending",
-        })
-        .select("id")
-        .single();
-      if (error || !data) throw error ?? new Error("Could not create approval");
-      return data.id;
-    });
-
-    const decision = await step.waitForEvent("await-operator-approval", {
-      event: "operator.approval",
-      timeout: "2d",
-      if: `async.data.id == "${approvalId}"`,
-    });
-
-    if (!decision) {
-      await step.run("mark-batch-failed", async () => {
-        await db.from("send_batches").update({ status: "failed" }).eq("id", batchId);
-      });
-      return { status: "timeout", batchId };
-    }
-
-    await step.run("apply-decision", async () => {
-      const finalStatus = decision.data.decision === "reject" ? "rejected" : "approved";
-      await db.from("send_batches").update({
-        status: finalStatus,
-        approved_at: new Date().toISOString(),
-      }).eq("id", batchId);
-      await db.from("approvals_queue").update({
-        status: finalStatus === "rejected" ? "rejected" : "approved",
-        operator_action: decision.data.decision,
-        operator_notes: decision.data.notes ?? null,
-        decided_at: new Date().toISOString(),
-      }).eq("id", approvalId);
-    });
-
-    if (decision.data.decision !== "reject") {
-      const isFirstApproved = await step.run("count-prior-approved-batches", async () => {
-        const { count, error } = await db
-          .from("send_batches")
-          .select("id", { count: "exact", head: true })
-          .eq("campaign_id", campaign.id)
-          .eq("status", "approved")
-          .neq("id", batchId);
-        if (error) return false;
-        return (count ?? 0) === 0;
-      });
-
-      if (isFirstApproved) {
-        await step.run("emit-sequence-activated-funnel", async () => {
-          await captureServerEvent(campaign.customer_id, "sequence_activated", {
-            campaign_id: campaign.id,
-            sequence_id: campaign.sequence_id,
-            first_batch_id: batchId,
-            batch_date,
-          });
-        });
-      }
-    }
-
-    return { status: decision.data.decision, batchId, approvalId };
-  },
+  runSendBatchGenerate as unknown as Parameters<typeof inngest.createFunction>[2],
 );
