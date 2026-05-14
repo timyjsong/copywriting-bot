@@ -1,47 +1,31 @@
 # Session Continuity
 
-Updated: 2026-05-14T15:30:00Z
+Updated: 2026-05-14T19:35:30Z
 
 ## Current State
 
-- Iteration: 23
+- Iteration: 24
 - Phase: PHASE_2_PAID_FLOW
-- RARV Step: REFLECT
+- RARV Step: VERIFY
 - Provider: claude
 - Elapsed: 4h 30m
 
 ## Last Completed Task
 
-- Last commit: Loki iter 23: dedup completed_checkout via $insert_id + Inngest event-id
-- Files changed: packages/inngest/src/functions/checkout.ts, packages/inngest/src/functions/checkout.test.ts (new), apps/web/app/api/stripe/webhook/route.ts, apps/web/app/api/stripe/webhook/route.test.ts, .loki/CONTINUITY.md
-
-## Iter 23 Summary
-
-Closed the only remaining funnel dedup gap. `completed_checkout` was the last
-funnel event still susceptible to silent double-counting across retries:
-
-- **Webhook side**: `inngest.send({...})` had no event `id`, so Stripe webhook
-  re-delivery (5xx/timeout) would create N independent Inngest events for one
-  real checkout. Now keyed on `stripe-checkout-${session.id}` so duplicates
-  collapse at the Inngest event-id dedup layer.
-- **Funnel side**: `track-funnel` step emitted `completed_checkout` without
-  `$insert_id`. Now stamps `funnelInsertId("completed_checkout", session_id)`
-  matching the iter-21 pattern for `viewed_result`. Step-retry safety even if
-  Inngest dedup ever lets one through.
-- **Pure runner**: extracted `runCheckoutCompleted` DI seam (matches roast.ts,
-  onboarding.ts, sendBatch.ts, performance.ts conventions) so dedup contract
-  is testable without spinning up Inngest.
-
-Tests added: 6 in new `checkout.test.ts` (customer upgrade, dedup key shape,
-retry-produces-same-key, different-sessions-produce-different-keys, db DI,
-throws-on-funnel-fail). 1 test updated in webhook route test to pin the
-`stripe-checkout-${session.id}` event id contract.
-
-## Test Counts
-
-- packages/inngest: 122 tests (was 116, +6)
-- apps/web: 126 tests (unchanged; one assertion expanded)
-- apps/ops: 16 tests (unchanged)
+- Iter 24: extended `emitFunnelEvent` helper with optional `dedupKey` → stamps
+  PostHog `$insert_id` so a retried Inngest step (e.g. transient PostHog 5xx)
+  collapses on PostHog's 24h dedup window instead of double-counting the
+  conversion. Same iter-21/23 pattern, applied at the helper layer so all
+  three remaining server-emitted funnel events inherit it uniformly:
+    - `rewrite_approved` keyed on `approval_id`
+    - `sequence_activated` keyed on `first_batch_id`
+    - `performance_report_sent` keyed on `${campaign_id}:${snapshot_date}`
+  Helper preserves the no-key fast path (reference-equality on props) for
+  backwards compat. Pinned 7 new contracts in `_funnel.test.ts` (key format,
+  cross-event collision guard, retry-produces-same-id, different-entities-
+  produce-different-ids, no-mutation invariant, reference-equality fallback,
+  empty-string `dedupKey` boundary). Three pipeline-level assertions updated
+  to lock the per-event key. All 435 tests pass; typecheck clean.
 
 ## Active Blockers
 
@@ -49,15 +33,14 @@ throws-on-funnel-fail). 1 test updated in webhook route test to pin the
 
 ## Next Up
 
-- PostHog funnel tracking → DONE through iter 23 (all 13 events dedup-safe)
-- Stripe Checkout integration → currently shipped + retry-safe
-- Next candidate: rewrite_approved + sequence_activated + performance_report_sent
-  also lack `$insert_id` (single-emission events, but Inngest step retries
-  could still double-count). Consider adding for symmetry with iter 21 + 23.
+- PostHog funnel tracking (one event left without dedup pin?
+  audit `serverPosthog.capture` callsites for any stragglers)
+- Ship to production
+- Stripe Checkout integration ($297 one-time)
 
 ## Key Decisions This Session
 
-- iter 23: extend the iter-21 dedup pattern (`$insert_id` keyed on a stable
-  per-entity ID) to the last server-only funnel event that lacked it. Also
-  add upstream protection at the Inngest event-id layer so Stripe webhook
-  re-delivery never even reaches the funnel emit.
+- Dedup `$insert_id` belongs at the `emitFunnelEvent` helper layer, not at
+  each caller, so future server-emitted events inherit the contract by
+  default. Optional `dedupKey` param keeps no-key fast path intact for
+  callers whose step has no retry surface.

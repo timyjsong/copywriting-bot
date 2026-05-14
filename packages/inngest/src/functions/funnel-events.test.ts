@@ -11,6 +11,9 @@ const { captureServerEventMock, serviceClientMock, runRewriteAgentMock, runBrand
 
 vi.mock("@copywriting-bot/shared/observability", () => ({
   captureServerEvent: captureServerEventMock,
+  // Real format — must match production `funnelInsertId` so the dedup-key
+  // assertions pin the actual `$insert_id` PostHog sees, not a fake echo.
+  funnelInsertId: (event: string, key: string) => `${event}:${key}`,
   addBreadcrumb: vi.fn(),
   captureException: vi.fn(),
 }));
@@ -337,10 +340,15 @@ describe("onboardingPipeline funnel emission (rewrite_approved)", () => {
 
     expect(out.status).toBe("approve");
     expect(captureServerEventMock).toHaveBeenCalledTimes(1);
+    // `$insert_id` keyed on approval_id locks the dedup contract — Inngest
+    // retries of this emit-step must reproduce the identical key so PostHog
+    // dedupes within its 24h window. Iter 24 closed the last server-emitted
+    // funnel events that lacked this stamping.
     expect(captureServerEventMock).toHaveBeenCalledWith("cust-1", "rewrite_approved", {
       sequence_id: "seq-1",
       approval_id: "approval-1",
       decision: "approve",
+      $insert_id: "rewrite_approved:approval-1",
     });
     expect(calls.find((c) => c.id === "emit-rewrite-approved-funnel")).toBeTruthy();
     assertUniqueStepIds(calls, sentEvents);
@@ -480,13 +488,17 @@ describe("sendBatchGenerate funnel emission (sequence_activated)", () => {
       step: step as any,
     });
 
-    // Funnel side: emission with full payload
+    // Funnel side: emission with full payload + $insert_id keyed on
+    // first_batch_id. Iter 24 stamped this so a retried emit-step (transient
+    // PostHog 5xx) collapses on PostHog's 24h dedup window instead of double-
+    // counting the "first batch approved" conversion.
     expect(captureServerEventMock).toHaveBeenCalledTimes(1);
     expect(captureServerEventMock).toHaveBeenCalledWith("cust-1", "sequence_activated", {
       campaign_id: "camp-1",
       sequence_id: "seq-1",
       first_batch_id: "batch-1",
       batch_date: "2026-05-14",
+      $insert_id: "sequence_activated:batch-1",
     });
 
     // Count-query was actually issued with the expected filter shape
@@ -611,8 +623,14 @@ describe("performanceDailyPull funnel emission (performance_report_sent)", () =>
     );
 
     for (const call of captureServerEventMock.mock.calls) {
-      const props = (call as unknown as [string, string, { snapshot_date: string }])[2];
+      const props = (call as unknown as [string, string, { snapshot_date: string; $insert_id: string }])[2];
       expect(props.snapshot_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      // Iter 24: `$insert_id` mirrors the performance_snapshots upsert's
+      // natural unique key (`campaign_id:snapshot_date`). A retried emit-step
+      // re-derives the identical key so PostHog collapses the duplicate.
+      expect(props.$insert_id).toBe(
+        `performance_report_sent:${(call as unknown as [string, string, { campaign_id: string }])[2].campaign_id}:${props.snapshot_date}`,
+      );
     }
 
     const emitIds = calls.filter((c) => c.id.startsWith("emit-perf-report-funnel-")).map((c) => c.id);

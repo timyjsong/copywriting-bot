@@ -103,6 +103,11 @@ export async function runSendBatchGenerate({ event, step, db: dbOverride }: Send
     });
 
     if (isFirstApproved) {
+      // `$insert_id` keyed on first_batch_id collapses retries within
+      // PostHog's 24h dedup window. `sequence_activated` fires exactly once
+      // per campaign (when the first batch is approved), so the batch id is
+      // the natural stable key — any retry of this step re-derives the same
+      // id and PostHog drops the duplicate.
       await emitFunnelEvent(
         step,
         "emit-sequence-activated-funnel",
@@ -114,6 +119,7 @@ export async function runSendBatchGenerate({ event, step, db: dbOverride }: Send
           first_batch_id: batchId,
           batch_date,
         },
+        batchId,
       );
     }
   }

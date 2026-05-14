@@ -111,11 +111,22 @@ export async function runOnboardingPipeline({ event, step, db: dbOverride }: Onb
   }
 
   if (outcome.approved) {
-    await emitFunnelEvent(step, "emit-rewrite-approved-funnel", customer_id, "rewrite_approved", {
-      sequence_id,
-      approval_id: outcome.approvalId,
-      decision: outcome.decision.decision,
-    });
+    // `$insert_id` keyed on approval_id collapses retries within PostHog's
+    // 24h dedup window. The approval row is created once per (sequence_id,
+    // operator_decision), so this id is stable across any step retry that
+    // re-runs the funnel emit (e.g. transient PostHog 5xx).
+    await emitFunnelEvent(
+      step,
+      "emit-rewrite-approved-funnel",
+      customer_id,
+      "rewrite_approved",
+      {
+        sequence_id,
+        approval_id: outcome.approvalId,
+        decision: outcome.decision.decision,
+      },
+      outcome.approvalId,
+    );
   }
 
   return {

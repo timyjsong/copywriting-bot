@@ -16,6 +16,9 @@ const {
 
 vi.mock("@copywriting-bot/shared/observability", () => ({
   captureServerEvent: captureServerEventMock,
+  // Real format — `_funnel.ts` imports this when callers pass `dedupKey`, so
+  // the mock must surface a function (not undefined) or pipelines crash.
+  funnelInsertId: (event: string, key: string) => `${event}:${key}`,
   addBreadcrumb: vi.fn(),
   captureException: vi.fn(),
 }));

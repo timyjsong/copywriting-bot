@@ -86,6 +86,10 @@ export async function runPerformanceDailyPull({ step, db: dbOverride }: Performa
       if (error) throw error;
     });
 
+    // `$insert_id` keyed on `${campaign_id}:${snapshot_date}` mirrors the
+    // performance_snapshots upsert's natural unique key — at most one report
+    // per campaign per day. A retried step (transient PostHog 5xx) re-derives
+    // the same id and PostHog drops the duplicate within its 24h window.
     await emitFunnelEvent(
       step,
       `emit-perf-report-funnel-${camp.id}`,
@@ -97,6 +101,7 @@ export async function runPerformanceDailyPull({ step, db: dbOverride }: Performa
         current_reply_rate: snap.current_reply_rate,
         uplift_pct: snap.uplift_pct,
       },
+      `${snap.campaign_id}:${today}`,
     );
 
     if (snap.trigger_free_rewrite) {
