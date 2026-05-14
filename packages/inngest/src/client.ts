@@ -65,6 +65,30 @@ export const events = {
       target_count: z.number().int().min(1).max(500),
     }),
   },
+  "support/inbound": {
+    data: z.object({
+      customer_email: z.string().email(),
+      subject: z.string(),
+      body: z.string(),
+      recent_thread: z.string().default(""),
+      twenty_one_day_metric_missed: z.boolean().default(false),
+    }),
+  },
+  "refund/requested": {
+    data: z.object({
+      customer_id: z.string().uuid(),
+      stripe_charge_id: z.string(),
+      amount: z.number().int(),
+      currency: z.string(),
+      reason: z.string().default(""),
+    }),
+  },
+  "rewrite/approved": {
+    data: z.object({
+      customer_id: z.string().uuid(),
+      sequence_id: z.string().uuid(),
+    }),
+  },
 } as const;
 
 const schemas = new EventSchemas().fromZod(events);

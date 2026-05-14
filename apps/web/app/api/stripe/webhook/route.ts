@@ -83,7 +83,35 @@ export async function POST(req: Request) {
 
       case "charge.refunded":
       case "charge.dispute.created": {
-        // TODO Phase 6 refund handling — for MVP we just log + queue manual review.
+        // Phase 6 — record the refund/dispute and queue an operator review.
+        const charge = event.data.object as Stripe.Charge;
+        const email =
+          (typeof charge.billing_details?.email === "string" ? charge.billing_details.email : null) ??
+          (typeof (charge as unknown as { receipt_email?: string }).receipt_email === "string"
+            ? (charge as unknown as { receipt_email: string }).receipt_email
+            : null);
+        if (!email) {
+          return NextResponse.json({ ok: true, ignored: "no email on charge" });
+        }
+        const db = serviceClient();
+        const { data: customer } = await db
+          .from("customers")
+          .select("id")
+          .eq("email", email)
+          .maybeSingle();
+        if (!customer) {
+          return NextResponse.json({ ok: true, ignored: "customer not found" });
+        }
+        await inngest.send({
+          name: "refund/requested",
+          data: {
+            customer_id: customer.id,
+            stripe_charge_id: charge.id,
+            amount: charge.amount_refunded ?? charge.amount,
+            currency: charge.currency,
+            reason: event.type === "charge.dispute.created" ? "stripe_dispute" : "stripe_refund",
+          },
+        });
         break;
       }
 
