@@ -5,6 +5,18 @@ import { emitFunnelEvent, type FunnelStep } from "./_funnel.js";
 import { listActiveCampaignsPaginated, type ActiveCampaign } from "./_campaigns.js";
 import type { DbPort } from "./_db.js";
 
+// Smartlead campaign IDs are positive integers in their public API. We accept
+// only strings that match /^\d+$/ to avoid `parseInt`'s trailing-garbage
+// behavior (`parseInt("123abc",10) === 123`), which would silently target the
+// wrong campaign if the stored id were ever contaminated. Returns null for
+// any non-conforming input.
+export function parseSmartleadCampaignId(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  return n;
+}
+
 export type PerformancePullCtx = {
   step: FunnelStep & {
     sendEvent: (id: string, payload: { name: string; data: object }) => Promise<unknown>;
@@ -29,8 +41,8 @@ export async function runPerformanceDailyPull({ step, db: dbOverride }: Performa
 
   for (const camp of campaigns) {
     if (!camp || !camp.smartlead_campaign_id) continue;
-    const slCampaignId = Number.parseInt(camp.smartlead_campaign_id, 10);
-    if (Number.isNaN(slCampaignId)) continue;
+    const slCampaignId = parseSmartleadCampaignId(camp.smartlead_campaign_id);
+    if (slCampaignId === null) continue;
 
     const metrics = await step.run(`pull-metrics-${camp.id}`, async () => {
       return smartlead.getCampaignMetrics(slCampaignId);

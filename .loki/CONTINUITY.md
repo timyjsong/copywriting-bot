@@ -1,22 +1,19 @@
 # Session Continuity
 
-Updated: 2026-05-14T17:36:00Z
+Updated: 2026-05-14T17:42:00Z
 
 ## Current State
 
-- Iteration: 10
+- Iteration: 11
 - Phase: PHASE_2_PAID_FLOW
 - RARV Step: VERIFY
 - Provider: claude
-- Elapsed: 2h 31m
+- Elapsed: 2h 37m
 
 ## Last Completed Task
 
-- Last commit: Loki iter 10: DI seam for inngest pipelines + structural test-utils split
-- Files changed: packages/inngest/src/functions/_db.ts (new), _campaigns.ts, _funnel.test.ts (new),
-  _campaigns.test.ts (new), onboarding.ts, sendBatch.ts, performance.ts,
-  funnel-events-edge.test.ts, test-utils/supabase-fake.ts (new, moved from functions/_test-fakes.ts)
-- Tests: 292 passing (+13 from iter 9: 11 new helper-unit tests + load-sequence null-data parity test + null-count branch lock)
+- Last commit (pending): Loki iter 11: fix smartlead_campaign_id strict-parse (parseInt trailing-garbage bug)
+- Files changed: packages/inngest/src/functions/performance.ts, packages/inngest/src/functions/funnel-events-edge.test.ts, .loki/CONTINUITY.md
 
 ## Active Blockers
 
@@ -24,32 +21,11 @@ Updated: 2026-05-14T17:36:00Z
 
 ## Next Up
 
-- PostHog funnel tracking (PRD-011)
-- Ship to production (PRD-012)
-- Stripe Checkout integration $297 one-time (PRD-013)
+- PostHog funnel tracking (live wiring + dashboards)
+- Ship to production (env wiring, domain, smoke tests)
+- Stripe Checkout end-to-end smoke against live test mode
 
 ## Key Decisions This Session
 
-- **DI seam (iter 10):** `runOnboardingPipeline` / `runSendBatchGenerate` / `runPerformanceDailyPull`
-  now accept `db?: DbPort` via ctx; tests inject a fake directly, eliminating
-  `vi.mock("@copywriting-bot/db/client")` in `funnel-events-edge.test.ts`. Closes
-  iter 7→9 architecture-strategist "pure functions still call serviceClient internally" finding.
-- **Test-utils structural split (iter 10):** Supabase + step fakes moved from
-  `src/functions/_test-fakes.ts` to `src/test-utils/supabase-fake.ts` so the
-  vitest import is sibling-folder-isolated, not just `_` prefixed.
-- **DbPort port type (iter 10):** `type DbPort = ReturnType<typeof serviceClient>`
-  in `_db.ts` — used by `_campaigns.ts` (replacing the inline re-coupling) and
-  all three pipeline ctx types.
-- **Fake `.then()` idempotency (iter 10):** Added `recorded_once` flag to the
-  Supabase fake builder so re-awaiting the same builder doesn't double-push
-  to `recorded.*`.
-
-## Mistakes & Learnings
-
-- TS strict + `noUncheckedIndexedAccess` requires `!` non-null assertions when
-  indexing `Record<string, T[]>` — caught at typecheck on edge-test asserts.
-- `inngest` package does NOT directly depend on `@supabase/supabase-js`; importing
-  `SupabaseClient` directly would force adding the dep. `ReturnType<typeof serviceClient>`
-  derives the same type via the workspace `@copywriting-bot/db/client` re-export.
-- The captureServerEvent mock needs explicit arg types (`vi.fn(async (a, b, c) => ...)`)
-  for `mock.calls[0]![2]` to be typed instead of `unknown[]`.
+- iter 11: replaced `Number.parseInt(id,10) + isNaN` guard in performance.ts with strict `/^\d+$/`-anchored `parseSmartleadCampaignId` helper. `parseInt("123abc",10) === 123` would have silently pulled metrics for the wrong campaign on any contaminated row — a real production bug, not just a test gap. Tests pin "abc", "", "0", "100.5", "-5", "123abc", "1e3", " 12 " as rejected; "100", "1" as accepted.
+- Test count: 303 (up from 292) across web/ops/inngest/shared/agents.

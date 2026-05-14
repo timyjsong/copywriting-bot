@@ -34,7 +34,7 @@ vi.mock("@copywriting-bot/agents", () => ({
 
 import { runOnboardingPipeline } from "./onboarding.js";
 import { runSendBatchGenerate } from "./sendBatch.js";
-import { runPerformanceDailyPull } from "./performance.js";
+import { runPerformanceDailyPull, parseSmartleadCampaignId } from "./performance.js";
 import {
   makeStep,
   makeSupabaseFake,
@@ -530,6 +530,51 @@ describe("performanceDailyPull — error paths + edge cases", () => {
     // Locks the early-termination contract: a single empty page must not
     // trigger a second range read.
     expect(fake.recorded.rangeCalls.campaigns).toEqual([[0, 199]]);
+  });
+
+  it.each([
+    ["abc", null],
+    ["", null],
+    ["0", null],
+    ["100.5", null],
+    ["-5", null],
+    ["123abc", null], // parseInt trailing-garbage trap
+    ["1e3", null], // scientific notation must not slip through
+    [" 12 ", null], // whitespace must not slip through
+    ["100", 100],
+    ["1", 1],
+  ])("parseSmartleadCampaignId(%j) === %j", (raw, expected) => {
+    expect(parseSmartleadCampaignId(raw)).toBe(expected);
+  });
+
+  it("skips a campaign whose smartlead_campaign_id has trailing garbage ('123abc')", async () => {
+    // Regression: Number.parseInt("123abc",10) === 123 — the old guard
+    // accepted this and silently pulled metrics for campaign 123. The strict
+    // parser must reject it.
+    const fake = wire({
+      campaigns: {
+        pages: {
+          pageSize: 200,
+          pages: [
+            [
+              {
+                id: "camp-trailing",
+                customer_id: "cust-trailing",
+                smartlead_campaign_id: "123abc",
+                started_at: "2026-04-01T00:00:00Z",
+              },
+            ],
+          ],
+        },
+      },
+    });
+    const { step } = makeStep();
+
+    const out = await runPerformanceDailyPull({ step: step as never, db: fake.db });
+
+    expect(out).toEqual({ processed: 0, results: [] });
+    expect(getCampaignMetricsMock).not.toHaveBeenCalled();
+    expect(captureServerEventMock).not.toHaveBeenCalled();
   });
 
   it("skips a campaign whose smartlead_campaign_id is non-numeric (e.g. 'abc')", async () => {
