@@ -3,7 +3,11 @@ import { z } from "zod";
 import { reviewOnboardingPayload } from "@copywriting-bot/agents/onboarder";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { inngest } from "@copywriting-bot/inngest/client";
-import { captureException, emitFunnelEventBestEffort } from "@copywriting-bot/shared/observability";
+import {
+  captureException,
+  emitFunnelEventBestEffort,
+  funnelInsertId,
+} from "@copywriting-bot/shared/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -110,7 +114,15 @@ export async function POST(req: Request) {
   await emitFunnelEventBestEffort(
     customerId,
     "onboarding_completed",
-    { customer_id: customerId },
+    {
+      customer_id: customerId,
+      // Dedup key matched by the client emission in onboarding/page.tsx so
+      // PostHog counts the wizard-completion exactly once even when both
+      // sides succeed (server is the source-of-truth fallback for ad-blocked
+      // clients). Use `funnelInsertId` so the format stays in lockstep with
+      // the client — a literal here drifted once and silently double-counted.
+      $insert_id: funnelInsertId("onboarding_completed", customerId),
+    },
     { phase: "onboarding_funnel_emission" },
   );
 

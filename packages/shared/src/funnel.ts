@@ -1,8 +1,9 @@
-import {
-  captureServerEventSafe,
-  captureException,
-  type FunnelEvent,
-} from "./observability.js";
+import { captureServerEventSafe, captureException } from "./observability.js";
+import type { FunnelEvent } from "./funnel-keys.js";
+
+// `funnelInsertId` moved to `./funnel-keys.ts` so client components can use
+// it without pulling posthog-node into the browser bundle.
+export { funnelInsertId } from "./funnel-keys.js";
 
 /**
  * Route-handler primitive for "emit a funnel event but never let it fail the

@@ -175,3 +175,58 @@ describe("emitFunnelEventBestEffort outer catch (ctx.phase observability)", () =
     expect((args[2] as { circ: Node }).circ).toBe(circ);
   });
 });
+
+describe("funnelInsertId — PostHog dedup key format", () => {
+  /**
+   * `funnelInsertId` is the single source of truth for the `$insert_id`
+   * format used by every dual-emission funnel event (client + server emit
+   * the same logical event; PostHog dedupes by `$insert_id`).
+   *
+   * The literals in these tests ARE the contract — a change in the helper
+   * format must fail loud so every call site can be audited in lockstep.
+   * Drift between client + server keys would silently double-count
+   * conversions in production funnels.
+   */
+
+  it("formats as '<event>:<key>' for the canonical viewed_result case", async () => {
+    const { funnelInsertId } = await import("./funnel.js");
+    expect(funnelInsertId("viewed_result", "roast-abc")).toBe("viewed_result:roast-abc");
+  });
+
+  it("formats as '<event>:<key>' for the onboarding_completed case (different event, same shape)", async () => {
+    const { funnelInsertId } = await import("./funnel.js");
+    expect(funnelInsertId("onboarding_completed", "cust-uuid-1")).toBe(
+      "onboarding_completed:cust-uuid-1",
+    );
+  });
+
+  it("namespaces by event so different events with the same underlying key never collide", async () => {
+    const { funnelInsertId } = await import("./funnel.js");
+    // Hypothetical: a future event reuses roast_id. The prefix prevents collision.
+    expect(funnelInsertId("viewed_result", "x")).not.toBe(
+      funnelInsertId("clicked_upsell", "x"),
+    );
+  });
+
+  it("is deterministic — same inputs always produce the same key (no Date.now, no uuid)", async () => {
+    const { funnelInsertId } = await import("./funnel.js");
+    const a = funnelInsertId("viewed_result", "roast-1");
+    const b = funnelInsertId("viewed_result", "roast-1");
+    expect(a).toBe(b);
+    // Determinism is the entire reason this exists — a non-stable key would
+    // silently disable PostHog dedup.
+  });
+
+  it("forwards the key verbatim — no encoding, no truncation, no normalisation", async () => {
+    const { funnelInsertId } = await import("./funnel.js");
+    // PostHog accepts any string up to 200 chars. Forwarding verbatim keeps
+    // the call site's natural identifier (uuid, email, slug) visible in
+    // PostHog's event explorer for debugging.
+    expect(funnelInsertId("viewed_result", "rOaSt-WiTh-DaShEs-and-mixed-CASE")).toBe(
+      "viewed_result:rOaSt-WiTh-DaShEs-and-mixed-CASE",
+    );
+    expect(funnelInsertId("onboarding_completed", "a:b:c")).toBe(
+      "onboarding_completed:a:b:c",
+    );
+  });
+});

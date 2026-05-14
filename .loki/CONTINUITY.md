@@ -1,20 +1,33 @@
 # Session Continuity
 
-Updated: 2026-05-14T18:58:00Z
+Updated: 2026-05-14T19:15:00Z
 
 ## Current State
 
-- Iteration: 20
+- Iteration: 21
 - Phase: PHASE_2_PAID_FLOW
 - RARV Step: VERIFY
 - Provider: claude
-- Elapsed: 3h 52m
+- Elapsed: 4h 13m
 
 ## Last Completed Task
 
-- Iter 20: pin client-side funnel emission contract (posthog-client.ts) — 12 new tests covering trackClient + identifyClient (loaded/unloaded paths, warn-once semantics, exception swallow, server-vs-browser branching). Full suite: 395 passing (was 383).
-- Iter 19: close iter-18 review gaps — testable outer-catch + symmetry pins
-- Iter 18: emitFunnelEventBestEffort primitive — collapse duplicated DiD
+- Last commit: Loki iter 21: dedup dual-emission funnel events via $insert_id
+- Files changed:
+  - packages/shared/src/funnel-keys.ts (new, zero-deps)
+  - packages/shared/src/funnel.ts (re-exports funnelInsertId)
+  - packages/shared/src/observability.ts (re-export, type moved)
+  - packages/shared/src/funnel.test.ts (+5 tests for funnelInsertId)
+  - packages/shared/package.json (./funnel-keys subpath)
+  - packages/inngest/src/functions/roast.ts (DI seam + $insert_id)
+  - packages/inngest/src/functions/roast.test.ts (new, 5 tests)
+  - apps/web/app/posthog-client.ts (zero-deps type import)
+  - apps/web/app/roast/page.tsx ($insert_id on viewed_result)
+  - apps/web/app/onboarding/page.tsx ($insert_id on onboarding_completed)
+  - apps/web/app/api/onboarding/route.ts ($insert_id on emit)
+  - apps/web/app/api/onboarding/route.test.ts (pin updated)
+- Tests: 405 passing (was 395, +10 — 5 funnelInsertId + 5 runRoastSubmitted)
+- Build: green, typecheck green
 
 ## Active Blockers
 
@@ -22,16 +35,25 @@ Updated: 2026-05-14T18:58:00Z
 
 ## Next Up
 
-- PostHog funnel tracking (carries — still pending PRD checklist)
-- **Ship to production. This goes live before anything else.**
-- Stripe Checkout integration ($297 one-time)
+- PRD-011: PostHog funnel tracking — dedup is the last identified data-integrity gap; remaining funnel work is dashboard wiring, not emission
+- PRD-013: Stripe Checkout integration ($297 one-time)
+- PRD-014: Onboarding wizard (5 steps) — wizard exists; deepen ICP validation
 
 ## Key Decisions This Session
 
-- Iters 14–19 hardened server-side funnel emission (captureServerEventSafe → emitFunnelEventBestEffort). Iter 20 closes the symmetry by pinning the **client-side** emission contract: silent-init, single-warn dev hint, swallow posthog-js exceptions, server-render safe. Same defense-in-depth pattern, opposite side of the wire.
-- Picked `posthog-client.ts` over a Phase 2 feature push because the recent review-gap audits showed coverage holes on telemetry primitives, and the client-side path was the only remaining untested funnel primitive. Phase 2 feature work moves once the safety net is symmetric.
+- Iter 21: Funnel double-counting bug in `viewed_result` + `onboarding_completed`
+  resolved with PostHog `$insert_id` dedup, keyed via `funnelInsertId(event, key)`
+  helper. Format `${event}:${key}` lives in zero-deps `funnel-keys.ts` so client
+  components can import without dragging posthog-node into browser bundle.
+  `submitted_email` left as-is — no shared natural key between client (pre-API)
+  and server (pre-agent-call) emissions; documented as intentional in funnel.ts.
 
 ## Mistakes & Learnings
 
-- 2026-05-14: `debugSpy.mock.calls[0][0]` triggers TS2532 under strict null checks. Use `debugSpy.mock.calls[0]` (typed as possibly-undefined), bind to a local, assert it's defined, then index. Pattern: `const firstCall = debugSpy.mock.calls[0]; expect(firstCall).toBeDefined(); expect(firstCall?.[0]).toContain("…");`
-- Lint blocked by Next.js 16 `next lint` deprecation prompt (interactive). Pre-existing; not introduced this iter. Out of scope.
+- Iter 21 mistake: First placed `funnelInsertId` in `funnel.ts` which transitively
+  imports `posthog-node` via `observability.ts`. Client Component bundling failed
+  with `node:readline` resolution error. Lesson: any helper used from a Client
+  Component must live in a module with zero Node-only deps. Extracted to
+  `funnel-keys.ts` and added `./funnel-keys` subpath export. Tests in
+  `funnel.test.ts` import via the `./funnel.js` re-export so the dedup-key
+  format contract is pinned regardless of which entry point a caller uses.

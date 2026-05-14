@@ -60,6 +60,10 @@ vi.mock("@copywriting-bot/shared/observability", () => ({
   captureException: captureExceptionMock,
   captureServerEventSafe: captureServerEventSafeMock,
   emitFunnelEventBestEffort: emitFunnelEventBestEffortMock,
+  // Real format — drift between this mock and the helper would silently pass
+  // the route test while producing a different `$insert_id` in prod. Locked
+  // to the contract pinned by packages/shared/src/funnel.test.ts.
+  funnelInsertId: (event: string, key: string) => `${event}:${key}`,
 }));
 
 type RouteModule = typeof import("./route.js");
@@ -200,7 +204,7 @@ describe("POST /api/onboarding", () => {
     await expect(res.json()).resolves.toMatchObject({ error: "DB error persisting sequence" });
   });
 
-  it("calls emitFunnelEventBestEffort (NOT the raw safe variant) with onboarding_completed + the funnel phase tag", async () => {
+  it("calls emitFunnelEventBestEffort (NOT the raw safe variant) with onboarding_completed + the funnel phase tag + $insert_id keyed on customer_id", async () => {
     insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-safe" }, error: null });
     const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
     expect(res.status).toBe(200);
@@ -208,7 +212,17 @@ describe("POST /api/onboarding", () => {
     expect(emitFunnelEventBestEffortMock).toHaveBeenCalledWith(
       VALID_UUID,
       "onboarding_completed",
-      { customer_id: VALID_UUID },
+      // $insert_id pin: must be keyed on customer_id via `funnelInsertId` so
+      // PostHog can dedupe against the client-side emission in
+      // app/onboarding/page.tsx. A regression that drops this key, keys on
+      // something non-stable (Date.now()), or inlines a literal that drifts
+      // from the helper format would silently double-count completions.
+      // The literal here is the contract — if `funnelInsertId` ever changes
+      // shape, this test must fail loud so all call sites can be audited.
+      {
+        customer_id: VALID_UUID,
+        $insert_id: `onboarding_completed:${VALID_UUID}`,
+      },
       { phase: "onboarding_funnel_emission" },
     );
     // Defense against a regression that bypasses the primitive and re-introduces

@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./approvals": "./src/approvals.ts",
     "./env": "./src/env.ts",
+    "./funnel-keys": "./src/funnel-keys.ts",
     "./observability": "./src/observability.ts",
     "./schemas": "./src/schemas/index.ts",
     "./scoring": "./src/scoring.ts"

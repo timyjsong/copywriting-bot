@@ -1,7 +1,9 @@
 "use client";
 
 import posthog from "posthog-js";
-import type { FunnelEvent } from "@copywriting-bot/shared/observability";
+// Import from the zero-deps subpath so this Client Component doesn't drag
+// posthog-node (Node-only) into the browser bundle via observability.ts.
+import type { FunnelEvent } from "@copywriting-bot/shared/funnel-keys";
 
 /**
  * Client-side funnel event helpers. `FunnelEvent` is imported (not redeclared)

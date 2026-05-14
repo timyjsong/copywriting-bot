@@ -69,20 +69,12 @@ export function serverPosthog(): PostHog | null {
   return _serverPosthog;
 }
 
-export type FunnelEvent =
-  | "visited_landing"
-  | "started_roast"
-  | "submitted_email"
-  | "viewed_result"
-  | "clicked_upsell"
-  | "started_checkout"
-  | "completed_checkout"
-  | "onboarding_started"
-  | "onboarding_step_completed"
-  | "onboarding_completed"
-  | "rewrite_approved"
-  | "sequence_activated"
-  | "performance_report_sent";
+// FunnelEvent + funnelInsertId moved to ./funnel-keys.ts so client components
+// can import them without dragging posthog-node into the browser bundle.
+// Re-exported from this module for backwards compat with existing imports.
+export type { FunnelEvent } from "./funnel-keys.js";
+export { funnelInsertId } from "./funnel-keys.js";
+import type { FunnelEvent } from "./funnel-keys.js";
 
 /**
  * Server-side capture of a funnel event. Safe to call without a PostHog key —
