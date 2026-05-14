@@ -107,7 +107,15 @@ export async function captureServerEventSafe(
   try {
     await captureServerEvent(distinctId, event, properties);
   } catch (err) {
-    captureException(err, { agent: "posthog", event });
+    try {
+      captureException(err, { agent: "posthog", event });
+    } catch {
+      // Sentry itself is down — the contract is "never throw" so we swallow
+      // here too. Last-resort log so the failure is at least visible in
+      // server output.
+      // eslint-disable-next-line no-console
+      console.error("[copywriting-bot] captureServerEventSafe: Sentry capture failed", err);
+    }
   }
 }
 

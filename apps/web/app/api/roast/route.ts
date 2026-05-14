@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { runRoastAgent } from "@copywriting-bot/agents/roast";
 import { RoastRequest } from "@copywriting-bot/shared/schemas";
 import { serviceClient } from "@copywriting-bot/db/client";
-import { captureServerEventSafe } from "@copywriting-bot/shared/observability";
+import { captureException, captureServerEventSafe } from "@copywriting-bot/shared/observability";
 import { inngest } from "@copywriting-bot/inngest/client";
 
 export const runtime = "nodejs";
@@ -25,7 +25,14 @@ export async function POST(req: Request) {
   }
   const { email, sequence, source } = parsed.data;
 
-  await captureServerEventSafe(email, "submitted_email", { source: source ?? null });
+  // Funnel emission is best-effort: must never block the roast a user just
+  // pasted in. The safe wrapper already swallows in-flight errors, but if it
+  // ever escapes (Sentry down, etc.) we still want to serve the result.
+  try {
+    await captureServerEventSafe(email, "submitted_email", { source: source ?? null });
+  } catch (err) {
+    captureException(err, { phase: "roast_funnel_emission" });
+  }
 
   const outcome = await runRoastAgent({ sequence, source });
   if (!outcome.ok) {

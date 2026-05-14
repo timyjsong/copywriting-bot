@@ -1,27 +1,23 @@
 # Session Continuity
 
-Updated: 2026-05-14T18:25:00Z
+Updated: 2026-05-14T18:30:00Z
 
 ## Current State
 
-- Iteration: 15
+- Iteration: 16
 - Phase: PHASE_2_PAID_FLOW
-- RARV Step: REFLECT
+- RARV Step: VERIFY
 - Provider: claude
-- Elapsed: 3h 18m
+- Elapsed: 3h 25m
 
 ## Last Completed Task
 
-- Iter 15: harden HTTP funnel emission. Added `captureServerEventSafe` so a
-  PostHog 5xx never fails a user-facing request. Migrated /api/roast and
-  /api/onboarding to the safe variant. Inngest steps keep the unsafe variant
-  so `step.run` retries still fire on transient PostHog failure.
-- Files changed: packages/shared/src/observability.ts,
-  packages/shared/src/safe-capture.test.ts (new),
-  apps/web/app/api/roast/route.ts,
-  apps/web/app/api/onboarding/route.ts,
-  apps/web/app/api/onboarding/route.test.ts
-- Tests: 357 passed (was 351; +5 in shared, +1 in web). Typecheck green.
+- Iteration 16: addressed iter-15 code-review High/Medium findings — onboarding test
+  now exercises the real rejection path, roast route gained handler-level
+  safe-variant + resilience tests, safe-capture asserts Sentry tags and a
+  Sentry-down scenario, and the safe wrapper got belt-and-suspenders try/catch
+  around its captureException call.
+- Tests: 363 pass (was 357); +6 net new tests across safe-capture, onboarding, roast.
 
 ## Active Blockers
 
@@ -29,20 +25,28 @@ Updated: 2026-05-14T18:25:00Z
 
 ## Next Up
 
-- PostHog funnel tracking (broader: client-side funnel ID stitching)
-- Ship landing page + roast tool to production
-- Stripe Checkout integration (already partially scaffolded; verify webhook flow)
+- PostHog funnel tracking — verify coverage of remaining funnel events
+- Stripe Checkout integration ($297 one-time)
+- Onboarding wizard (5 steps) — verify each step emits its own funnel event
 
 ## Key Decisions This Session
 
-- HTTP routes use `captureServerEventSafe` (swallow + Sentry); Inngest steps
-  use `captureServerEvent` (rethrow so step retries fire). One module, two
-  contracts, documented in the function JSDoc.
+- Funnel emission lives **after** the success-defining work in route handlers
+  (insert + inngest.send). A failing PostHog must never 500 a user whose work
+  is already persisted. Both `/api/onboarding` and `/api/roast` now wrap the
+  `captureServerEventSafe` call in their own try/catch — defense-in-depth on
+  top of the wrapper's own swallow contract.
 
 ## Mistakes & Learnings
 
-- (iter 15) A funnel event sitting *before* the agent call in an HTTP route is
-  a critical-path dependency on a non-critical service. If PostHog 5xxs, the
-  user gets a 500 even though we could have completed the request. Lesson:
-  observability calls in HTTP routes must be non-fatal; observability calls
-  in durable steps should still surface errors to drive retries.
+- **iter 15**: Wrote a test titled "still returns 200 when funnel emission fails"
+  that used `mockResolvedValueOnce(undefined)` instead of `mockRejectedValueOnce`.
+  Test title and inline comment claimed the swallow-on-failure contract but the
+  mock never simulated failure. **Prevention**: when a test name says "X
+  fails", the mock must produce a rejection/throw, not a resolution. Read the
+  mock setup line carefully — `mockResolvedValueOnce` is always success.
+- **iter 15**: Swapped `roast/route.ts` to the safe variant without adding a
+  route-level test asserting that swap. A revert would have gone unnoticed.
+  **Prevention**: when changing the *which* of two interchangeable APIs in a
+  route, add a test that asserts the call shape (which mock fired, with what
+  args). Wiring tests are cheap.

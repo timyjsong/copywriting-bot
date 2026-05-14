@@ -194,12 +194,8 @@ describe("POST /api/onboarding", () => {
     await expect(res.json()).resolves.toMatchObject({ error: "DB error persisting sequence" });
   });
 
-  it("still returns 200 when funnel emission fails (uses safe variant)", async () => {
+  it("calls the safe variant with the funnel payload (wiring)", async () => {
     insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-safe" }, error: null });
-    // captureServerEventSafe throwing would surface here as a rejected mock
-    // — the safe wrapper swallows in production, so it must be safe to call
-    // it even if it ever escapes. We assert the route still returns 200.
-    captureServerEventSafeMock.mockResolvedValueOnce(undefined);
     const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
     expect(res.status).toBe(200);
     expect(captureServerEventSafeMock).toHaveBeenCalledTimes(1);
@@ -208,5 +204,18 @@ describe("POST /api/onboarding", () => {
       "onboarding_completed",
       { customer_id: VALID_UUID },
     );
+  });
+
+  it("still returns 200 when funnel emission rejects (escaped safe wrapper)", async () => {
+    insertSingleMock.mockResolvedValueOnce({ data: { id: "seq-resilient" }, error: null });
+    // Simulates the worst case where captureServerEventSafe's internal
+    // try/catch was somehow bypassed (e.g., Sentry itself throwing) and the
+    // promise rejects. The route must still return 200 because the
+    // success-defining work (sequence insert + inngest dispatch) is done.
+    captureServerEventSafeMock.mockRejectedValueOnce(new Error("posthog 503"));
+    const res = await POST(postJson(validBody({ customer_id: VALID_UUID })));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ ok: true, customer_id: VALID_UUID, sequence_id: "seq-resilient" });
   });
 });

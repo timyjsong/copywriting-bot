@@ -16,6 +16,7 @@ const captureMock = vi.fn();
 const flushMock = vi.fn();
 const sentryCaptureExceptionMock = vi.fn();
 const sentryWithScopeMock = vi.fn();
+const sentrySetTagMock = vi.fn();
 
 vi.mock("posthog-node", () => ({
   PostHog: vi.fn().mockImplementation(() => ({
@@ -27,7 +28,7 @@ vi.mock("posthog-node", () => ({
 vi.mock("@sentry/nextjs", () => ({
   withScope: (cb: (scope: { setTag: (k: string, v: unknown) => void }) => void) => {
     sentryWithScopeMock(cb);
-    cb({ setTag: vi.fn() });
+    cb({ setTag: sentrySetTagMock });
   },
   captureException: sentryCaptureExceptionMock,
   addBreadcrumb: vi.fn(),
@@ -41,6 +42,7 @@ beforeEach(() => {
   flushMock.mockReset();
   sentryCaptureExceptionMock.mockReset();
   sentryWithScopeMock.mockReset();
+  sentrySetTagMock.mockReset();
   process.env = { ...ORIGINAL_ENV, POSTHOG_SERVER_KEY: "phc_test" };
 });
 
@@ -88,6 +90,14 @@ describe("captureServerEventSafe", () => {
     expect(sentryWithScopeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("tags the Sentry scope with agent=posthog and the event name", async () => {
+    flushMock.mockRejectedValueOnce(new Error("posthog 503"));
+    const mod = await import("./observability.js");
+    await mod.captureServerEventSafe("user@x.com", "onboarding_completed");
+    expect(sentrySetTagMock).toHaveBeenCalledWith("agent", "posthog");
+    expect(sentrySetTagMock).toHaveBeenCalledWith("event", "onboarding_completed");
+  });
+
   it("swallows a synchronous capture() throw", async () => {
     captureMock.mockImplementationOnce(() => {
       throw new Error("invalid distinct_id");
@@ -97,6 +107,19 @@ describe("captureServerEventSafe", () => {
       mod.captureServerEventSafe("", "submitted_email"),
     ).resolves.toBeUndefined();
     expect(sentryCaptureExceptionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still resolves when Sentry capture itself throws (last-resort swallow)", async () => {
+    flushMock.mockRejectedValueOnce(new Error("posthog 503"));
+    sentryCaptureExceptionMock.mockImplementationOnce(() => {
+      throw new Error("sentry down");
+    });
+    const mod = await import("./observability.js");
+    // The safe variant's contract is "never throw". If Sentry itself is
+    // unavailable, the wrapper must still resolve.
+    await expect(
+      mod.captureServerEventSafe("user@x.com", "completed_checkout"),
+    ).resolves.toBeUndefined();
   });
 });
 
