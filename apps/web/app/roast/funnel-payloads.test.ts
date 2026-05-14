@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RoastResultT } from "@copywriting-bot/shared/schemas";
-import { viewedResultPayload } from "./funnel-payloads.js";
+import { clickedUpsellRoastResultPayload, viewedResultPayload } from "./funnel-payloads.js";
 
 /**
  * Pins the client-side `viewed_result` payload contract.
@@ -71,5 +71,76 @@ describe("viewedResultPayload", () => {
   it("returns a stable shape across calls (no Date.now, no uuid leak)", () => {
     const r = makeResult();
     expect(viewedResultPayload(r, "roast-1")).toEqual(viewedResultPayload(r, "roast-1"));
+  });
+});
+
+describe("clickedUpsellRoastResultPayload", () => {
+  it("sets $insert_id to the canonical clicked_upsell:<roast_id> format", () => {
+    // The pin: regression that drifts the prefix, drops the colon, or keys
+    // on Date.now() would silently double-count the top-of-paid-funnel
+    // conversion event. Hard-pin the literal so the test fails loud.
+    const payload = clickedUpsellRoastResultPayload("roast-abc", 72);
+    expect(payload.$insert_id).toBe("clicked_upsell:roast-abc");
+  });
+
+  it("forwards surface, roast_id, overall_score verbatim", () => {
+    expect(clickedUpsellRoastResultPayload("roast-xyz", 41)).toEqual({
+      surface: "roast_result",
+      roast_id: "roast-xyz",
+      overall_score: 41,
+      $insert_id: "clicked_upsell:roast-xyz",
+    });
+  });
+
+  it("omits $insert_id entirely when roast_id is null (asymmetry vs viewedResultPayload, mirrors onboardingCompletedPayload)", () => {
+    // The page renders `RoastResultView` with `roastId: string | null` and a
+    // `?? ""` fallback at the href level. If the click fires with no real
+    // entity to key on, deterministic-bucketing every nullish click into
+    // `"clicked_upsell:"` would collapse every degraded-state click across
+    // every user/session into ONE conversion event. Worse than just letting
+    // PostHog count them. Skip the key in that case.
+    const payload = clickedUpsellRoastResultPayload(null, 50);
+    expect(payload).toEqual({
+      surface: "roast_result",
+      roast_id: null,
+      overall_score: 50,
+    });
+    expect(payload.$insert_id).toBeUndefined();
+    expect("$insert_id" in payload).toBe(false);
+  });
+
+  it("omits $insert_id when roast_id is empty string (same degraded-state philosophy as null)", () => {
+    // Empty string is falsy under the conditional-spread guard — the
+    // `roastId ?? ""` default at the href fallback is the most likely path
+    // to an empty value reaching the click handler. Treat it identically to
+    // null rather than collapsing to `"clicked_upsell:"`.
+    const payload = clickedUpsellRoastResultPayload("", 50);
+    expect(payload.$insert_id).toBeUndefined();
+    expect("$insert_id" in payload).toBe(false);
+  });
+
+  it("returns a stable shape across calls (no Date.now, no uuid leak)", () => {
+    expect(clickedUpsellRoastResultPayload("roast-1", 60)).toEqual(
+      clickedUpsellRoastResultPayload("roast-1", 60),
+    );
+  });
+
+  it("different roast_ids produce different insert_ids (no silent collision)", () => {
+    // Guard against a regression that hardcodes the suffix or keys on
+    // overall_score instead of roast_id (two users with the same score
+    // would silently dedup to one event).
+    const a = clickedUpsellRoastResultPayload("roast-a", 60);
+    const b = clickedUpsellRoastResultPayload("roast-b", 60);
+    expect(a.$insert_id).not.toBe(b.$insert_id);
+  });
+
+  it("cross-event isolation: same roast_id produces different keys for viewed_result vs clicked_upsell", () => {
+    // The `${event}:` prefix in funnelInsertId exists exactly to namespace
+    // events that share an underlying entity ID. Lock the guarantee so a
+    // refactor that drops the prefix can't silently merge `viewed_result`
+    // and `clicked_upsell` counts for the same roast.
+    const viewed = viewedResultPayload(makeResult(), "roast-shared");
+    const upsell = clickedUpsellRoastResultPayload("roast-shared", 72);
+    expect(viewed.$insert_id).not.toBe(upsell.$insert_id);
   });
 });

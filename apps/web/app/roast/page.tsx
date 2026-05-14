@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { RoastResultT } from "@copywriting-bot/shared/schemas";
 import { dimensionLabel, scoreBand, scoreColor, summariseResult } from "@copywriting-bot/shared/scoring";
 import { identifyClient, trackClient } from "../posthog-client";
-import { viewedResultPayload } from "./funnel-payloads";
+import { clickedUpsellRoastResultPayload, viewedResultPayload } from "./funnel-payloads";
 
 type Stage = "idle" | "submitting" | "result" | "error";
 
@@ -216,11 +216,10 @@ function RoastResultView({
         <Link
           href={`/checkout?from_roast=${roastId ?? ""}`}
           onClick={() =>
-            trackClient("clicked_upsell", {
-              surface: "roast_result",
-              roast_id: roastId ?? null,
-              overall_score: result.overall_score,
-            })
+            trackClient(
+              "clicked_upsell",
+              clickedUpsellRoastResultPayload(roastId, result.overall_score),
+            )
           }
           className="mt-6 inline-block rounded-md bg-ink px-5 py-3 text-cream hover:bg-ink/90"
         >
