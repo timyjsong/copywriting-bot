@@ -1,6 +1,7 @@
 import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { smartlead, performance } from "@copywriting-bot/agents";
+import { captureServerEvent } from "@copywriting-bot/shared/observability";
 
 type ActiveCampaign = {
   id: string;
@@ -75,6 +76,15 @@ export const performanceDailyPull = inngest.createFunction(
           },
           { onConflict: "campaign_id,snapshot_date" },
         );
+      });
+
+      await step.run(`emit-perf-report-funnel-${camp.id}`, async () => {
+        await captureServerEvent(snap.customer_id, "performance_report_sent", {
+          campaign_id: snap.campaign_id,
+          snapshot_date: today,
+          current_reply_rate: snap.current_reply_rate,
+          uplift_pct: snap.uplift_pct,
+        });
       });
 
       if (snap.trigger_free_rewrite) {

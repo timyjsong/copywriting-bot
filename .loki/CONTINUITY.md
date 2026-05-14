@@ -1,56 +1,41 @@
 # Session Continuity
 
-Updated: 2026-05-14T12:53:00Z
+Updated: 2026-05-14T17:00:00Z
 
 ## Current State
 
-- Iteration: 5 (committed b1d2d0b + fa4682a + f767641)
+- Iteration: 6
 - Phase: PHASE_2_PAID_FLOW
-- RARV Step: VERIFY (green)
+- RARV Step: VERIFY
 - Provider: claude
-- Elapsed: ~2.5h
+- Elapsed: 1h 55m
 
 ## Last Completed Task
 
-- Loki iter 5: massive test coverage expansion across all agents + ops + boundary routes
-- Tests: 112 → 243 (+131 new across 5b/5c follow-ups)
-- New test files (13 total this iteration):
-  - packages/agents: rewrite, roast, brand-voice, outbound, apollo, support,
-    send-infra (agent), send-infra (dns)
-  - apps/ops: /api/refund, /api/approvals/[id] (new vitest setup)
-  - apps/web: /api/checkout, /api/stripe/webhook, dashboard/helpers
-  - packages/shared: env.ts validation
-- Refactor: extracted apps/web/app/dashboard helpers into ./helpers.ts (testable
-  sibling module — mirrors the iter-3 ApprovalSummary extraction pattern).
+- Iter 6: wire 3 unfired PostHog funnel events (rewrite_approved, sequence_activated, performance_report_sent)
+- Files changed: packages/inngest/src/functions/{onboarding,sendBatch,performance}.ts + new test file
+- Tests added: 4 (funnel-events.test.ts) — 247 total now passing
+- Typecheck: green. Build: green.
 
 ## Active Blockers
 
-- None. Tests 199/199, typecheck clean, build green for ops + web.
-- Pre-existing lint failure: `next lint` is deprecated and interactive — affects both apps,
-  not caused by this iteration.
+- None
 
 ## Next Up
 
-- Customer dashboard skeleton (prd-015) — page exists, content is thin
-- Onboarding wizard step-count audit (prd-014) — verify 5 distinct steps
-- Smartlead API integration depth (prd-019)
-- Apollo enrichment depth + signal extraction (prd-024)
+- PostHog funnel tracking — fully wired across server-side gate transitions now
+- **Ship to production. This goes live before anything else.**
+- Stripe Checkout integration ($297 one-time) — already integrated, may need DNS/deploy work
 
 ## Key Decisions This Session
 
-- Prioritized test coverage over new features after seeing 14 critical/high learnings
-  from iter 3-4 about missing tests on hot-path code (Rewrite/Roast/Brand-Voice/etc).
-- Standard agent-test pattern: hoist mocks via `vi.hoisted(...)`, mock `../client.js`
-  with `vi.importActual` spread so `extractJsonObject` stays real, mock observability.
-  This pattern is now established in 6 agent test files for future agents.
-- Mocked `node:dns.promises` for DNS verification tests instead of hitting real DNS.
-- Mocked Stripe `webhooks.constructEvent` for webhook tests (bypassing signature crypto).
+- Iter 6 chose to close funnel gaps (3 declared FunnelEvent variants were never emitted) over starting Phase 3 send-infra work — closes the loop on PRD §3 PostHog funnel coverage.
+- sequence_activated fires only on the FIRST approved send batch (deduped by querying prior approved batches), not every batch — semantically "the sequence went live."
+- performance_report_sent fires once per campaign per daily snapshot — semantically "report data is available in the dashboard."
+- All funnel emissions wrapped in step.run for Inngest durability; idempotent at the step boundary.
 
 ## Mistakes & Learnings
 
-- vi.mock factory cannot reference top-level `const` — must use `vi.hoisted()` to share
-  mock fns between vi.mock factories and tests. Caught this on first rewrite test run.
-- `pnpm test --run path` from wrong cwd silently uses workspace runner — always
-  cd into package first when running a single test file.
-- TypeScript strict mode flags `arr[0]` as possibly undefined — use `arr[0]?.foo`
-  in tests when the test already asserts length.
+- Iter 3 finding: FunnelEvent union was duplicated between shared/observability.ts and apps/web/posthog-client.ts. Fixed in iter 4 by re-exporting the type. Lesson: SSOT for cross-package types belongs in @copywriting-bot/shared; client code imports, never redeclares.
+- Iter 3 finding: ApprovalSummary was a god-switch in apps/ops/app/approvals/page.tsx. Fixed in iter 4 by extracting renderers.tsx with a per-type registry. Lesson: open/closed in approval surfaces — add a new approval type by extending the renderer map, not editing the page.
+- Iter 5 finding: many newly-added routes shipped with zero tests. Iter 5 added 131 unit tests across schemas, env, helpers, scoring, dashboard. Lesson: every new route/helper gets a sibling .test.ts in the same iteration that creates it.

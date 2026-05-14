@@ -1,6 +1,7 @@
 import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { rewrite, brandVoice } from "@copywriting-bot/agents";
+import { captureServerEvent } from "@copywriting-bot/shared/observability";
 
 /**
  * onboardingPipeline — durable workflow that runs after a customer completes
@@ -116,6 +117,16 @@ export const onboardingPipeline = inngest.createFunction(
         .eq("id", approvalId);
       await db.from("sequences").update({ status, approved_at: new Date().toISOString() }).eq("id", sequence_id);
     });
+
+    if (decision.data.decision !== "reject") {
+      await step.run("emit-rewrite-approved-funnel", async () => {
+        await captureServerEvent(customer_id, "rewrite_approved", {
+          sequence_id,
+          approval_id: approvalId,
+          decision: decision.data.decision,
+        });
+      });
+    }
 
     return { status: decision.data.decision, approvalId, customer_id, sequence_id };
   },

@@ -1,5 +1,6 @@
 import { inngest } from "../client.js";
 import { serviceClient } from "@copywriting-bot/db/client";
+import { captureServerEvent } from "@copywriting-bot/shared/observability";
 
 /**
  * sendBatchGenerate — when an approved sequence's campaign needs a daily
@@ -95,6 +96,30 @@ export const sendBatchGenerate = inngest.createFunction(
         decided_at: new Date().toISOString(),
       }).eq("id", approvalId);
     });
+
+    if (decision.data.decision !== "reject") {
+      const isFirstApproved = await step.run("count-prior-approved-batches", async () => {
+        const { count, error } = await db
+          .from("send_batches")
+          .select("id", { count: "exact", head: true })
+          .eq("campaign_id", campaign.id)
+          .eq("status", "approved")
+          .neq("id", batchId);
+        if (error) return false;
+        return (count ?? 0) === 0;
+      });
+
+      if (isFirstApproved) {
+        await step.run("emit-sequence-activated-funnel", async () => {
+          await captureServerEvent(campaign.customer_id, "sequence_activated", {
+            campaign_id: campaign.id,
+            sequence_id: campaign.sequence_id,
+            first_batch_id: batchId,
+            batch_date,
+          });
+        });
+      }
+    }
 
     return { status: decision.data.decision, batchId, approvalId };
   },
