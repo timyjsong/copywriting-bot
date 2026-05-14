@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { trackClient } from "../posthog-client";
+import { abortableSleep, resolveCheckoutSession } from "./resolve-session";
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -29,39 +30,23 @@ function OnboardingInner() {
   }, [sessionId]);
 
   // Resolve the Stripe session → customer_id once we have a session_id.
-  // Retries with backoff while the webhook is still processing.
+  // Retries with backoff while the webhook is still processing. The
+  // AbortController cancels both the in-flight fetch AND the pending sleep
+  // when the component unmounts — no stray timers, no stale setState.
   useEffect(() => {
     if (!sessionId || customerId) return;
-    let cancelled = false;
-    let attempt = 0;
-    async function tick() {
-      attempt += 1;
-      try {
-        const res = await fetch("/api/checkout/resolve", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId }),
-        });
-        const body = (await res.json()) as { customer_id?: string; pending?: boolean; error?: string };
-        if (cancelled) return;
-        if (body.customer_id) {
-          setCustomerId(body.customer_id);
-          return;
-        }
-        if (body.pending && attempt < 12) {
-          setTimeout(tick, 1500);
-          return;
-        }
-        setResolveError(body.error ?? "Could not link to your checkout session yet. Refresh in a few seconds.");
-      } catch (e: unknown) {
-        if (cancelled) return;
-        setResolveError(e instanceof Error ? e.message : String(e));
-      }
-    }
-    tick();
-    return () => {
-      cancelled = true;
-    };
+    const controller = new AbortController();
+    void (async () => {
+      const result = await resolveCheckoutSession(sessionId, {
+        fetch: typeof window !== "undefined" ? window.fetch.bind(window) : fetch,
+        sleep: abortableSleep,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      if (result.kind === "ok") setCustomerId(result.customer_id);
+      else if (result.kind === "error") setResolveError(result.message);
+    })();
+    return () => controller.abort();
   }, [sessionId, customerId]);
   const [form, setForm] = useState({
     sending_domain: "",

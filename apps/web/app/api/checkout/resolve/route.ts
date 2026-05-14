@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { z } from "zod";
 import { serverEnv } from "@copywriting-bot/shared/env";
 import { serviceClient } from "@copywriting-bot/db/client";
 import { captureException } from "@copywriting-bot/shared/observability";
+import { ResolveCheckoutBody } from "./schema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,10 +17,6 @@ export const dynamic = "force-dynamic";
  * customer row — the client should retry. Returns 410 if the session has
  * expired and was never paid.
  */
-
-const Body = z.object({
-  session_id: z.string().min(8),
-});
 
 let _stripe: Stripe | null = null;
 function stripe(): Stripe {
@@ -36,7 +32,7 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  const parsed = Body.safeParse(payload);
+  const parsed = ResolveCheckoutBody.safeParse(payload);
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid session_id" }, { status: 400 });
   }

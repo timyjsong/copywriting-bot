@@ -1,51 +1,52 @@
 # Session Continuity
 
-Updated: 2026-05-14T12:20:00Z
+Updated: 2026-05-14T12:30:00Z
 
 ## Current State
 
-- Iteration: 3
-- Phase: PHASE_2_PAID_FLOW (Phase 1 PostHog + Phase 2 deepening complete)
+- Iteration: 4
+- Phase: PHASE_2_PAID_FLOW
+- RARV Step: VERIFY (complete; commit pending)
 - Provider: claude
-- Status: web + ops both build clean; 58 tests passing across 10 files
+- Elapsed: ~1h 25m
 
-## Last Completed Task — Iteration 3
+## Last Completed Task
 
-**Phase 1 (PostHog funnel + ship-ready)**
-- Added client-side PostHog provider (`apps/web/app/posthog-provider.tsx`) wired into root layout.
-- Added typed `trackClient` / `identifyClient` helpers (`apps/web/app/posthog-client.ts`).
-- Extracted landing CTA to a client component to fire `visited_landing`, `started_roast`, `clicked_upsell`.
-- Wired `started_roast`, `submitted_email`, `viewed_result`, `clicked_upsell` events into `/roast`.
-- Wired `started_checkout` into `/checkout`.
-- Wired `onboarding_started`, `onboarding_step_completed`, `onboarding_completed` into `/onboarding`.
-- Added `onboarding_step_completed` to the shared `FunnelEvent` union.
-- Fixed the production build: workspace `.js` import extensions now resolve to `.ts` via `webpack.resolve.extensionAlias` in both apps' next.config.
-- Sitemap/robots no longer require Supabase env at build time.
-
-**Phase 2 (paid flow)**
-- New `POST /api/checkout/resolve` resolves Stripe session_id → customer_id deterministically (replaces fragile "most recent onboarding" lookup).
-- Onboarding wizard now polls resolve endpoint with backoff while Stripe webhook is processing; shows linking status.
-- Onboarding API accepts `customer_id` directly; webhook-resolution path is now reliable.
-- Customer dashboard now fetches real status via `GET /api/dashboard/status?email=`; renders sequence / campaign / latest performance snapshot with tone-aware cards.
-- Operator approvals page now: groups counts by type, shows SLA countdowns, surfaces type-specific summaries (rewrite playbook, batch size, refund amount, etc.), folds raw payload into `<details>`.
+- Iter 4: addressed all 14 code-review findings from iter 3
+  - FunnelEvent SSOT: posthog-client now imports the union from shared
+  - observability.test.ts rewritten to defend the real contract (no tautologies)
+  - /api/checkout/resolve: 10 real handler tests (all 8 branches), schema moved to schema.ts (Next.js disallows arbitrary route.ts exports)
+  - /api/dashboard/status: 7 handler tests covering 400/404/500/success with full + partial + null sub-queries
+  - /api/onboarding: 9 tests including the new customer_id branch, precedence, invalid UUID, fallback
+  - Approval helpers (timeAgo/timeUntil/slaOverdue/formatDuration/groupCounts) moved to packages/shared/src/approvals.ts with 22 unit tests (negative/boundary/clock-skew coverage)
+  - ApprovalSummary refactored into a renderer registry (`renderers.tsx`) + normalizer (`normalizeApprovalPayload`) — open/closed; malformed payloads tested
+  - Onboarding resolve loop extracted to resolve-session.ts (testable; AbortController-driven, no leaked setTimeout, max-attempts surfaces explicit error, non-JSON body handled) with 9 tests
 
 ## Active Blockers
 
 - None
 
+## Test counts
+
+- packages/shared: 47 tests (was 25)
+- packages/agents: 21 tests (unchanged)
+- apps/web: 44 tests (was 13)
+- Total: 112 (was 58)
+
 ## Next Up
 
-- Rewrite Agent v1 + Brand Voice scraper full wiring (need real fetch of customer URL).
-- Smartlead workspace provisioning end-to-end.
-- Daily batch generation cron + approval queue UI for batches.
-- Programmatic SEO: expand playbook page count toward 500.
+- PostHog funnel tracking (prd-011) — already partially done in iter 3, verify
+- Stripe Checkout integration deepen (prd-013)
+- Approvals API tests (apps/ops still has no vitest setup)
 
 ## Key Decisions This Session
 
-- Use `webpack.resolve.extensionAlias` (Webpack ≥ 5.74) to map `.js` → `.ts` for monorepo packages with explicit `.js` import extensions. Avoids changing 50+ import sites.
-- Sitemap / robots read `process.env.NEXT_PUBLIC_APP_URL` directly with a localhost fallback so static generation doesn't hard-require Supabase keys at build time.
-- Onboarding now resolves Stripe session → customer client-side with retry — keeps the webhook as the single writer of customer rows, decouples wizard timing from webhook latency.
+- Schemas that need to be imported by tests must live in non-route files; route.ts is reserved for Next.js's allowed exports only.
+- Pure helpers go to packages/shared so they're testable without standing up a per-app vitest. Renderers stay in the app that owns them.
+- The resolve loop uses AbortController + AbortSignal-aware sleep so unmount cancels timers — no `cancelled` flag with leaked setTimeout.
 
 ## Mistakes & Learnings
 
-- Caching the entire `publicEnv` parse for routes that only need one variable is a foot-gun at build time. Stick to `process.env.X` for pure marketing / SEO outputs.
+- Iter 3 mistake: test files that redeclare the schema they're "guarding" provide false coverage. Always import from production. (Caught here; fixed by extracting schema.ts.)
+- Iter 3 mistake: tautological `expect(arr.length).toBe(arr.length)` passes regardless of contents. Always assert against an external invariant.
+- Iter 3 mistake: setTimeout-based retry loops with only a `cancelled` flag leak timers. Use AbortController + AbortSignal-aware sleep.
