@@ -50,3 +50,4 @@ supabase/.temp/
 .loki/session.lock
 .loki/session.lock.lockdir/
 .loki/loki.pid
+.loki/
