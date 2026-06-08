@@ -2,7 +2,7 @@
 
 Autonomous cold-email optimization for B2B SaaS founders — a productized, self-serve service built around an **operator-gated multi-agent pipeline** and durable, resumable workflows.
 
-> **Status:** Feature-complete MVP scaffold. The nine-agent pipeline is implemented and unit-tested (52 tests, clean strict-TypeScript typecheck across six workspaces) against mocked external services. It has **not** been deployed or run against live credentials — a working prototype, not a shipped product. See [Project status](#project-status).
+> **Status:** Feature-complete MVP scaffold. The nine-agent pipeline is implemented and unit-tested (442 tests, clean strict-TypeScript typecheck across six workspaces) against mocked external services. It has **not** been deployed or run against live credentials — a working prototype, not a shipped product. See [Project status](#project-status).
 
 ## What it does
 
@@ -67,7 +67,7 @@ Optional: local Supabase (`supabase start` + apply `packages/db/migrations/0001_
 
 ## Project status
 
-**Implemented and tested:** the free Roast tool end to end; Stripe Checkout + webhook (test mode); the onboarding pipeline with operator approval gate; the operator approval-queue UI; all 9 agents (unit-tested against a mock Anthropic client); Smartlead and Apollo HTTP clients; the deterministic performance monitor and daily cron; the full Supabase schema (10 tables); Sentry + PostHog wiring; legal and programmatic-SEO pages. 52 unit tests pass; typecheck is clean across all six workspaces.
+**Implemented and tested:** the free Roast tool end to end; Stripe Checkout + webhook (test mode); the onboarding pipeline with operator approval gate; the operator approval-queue UI; all 9 agents (unit-tested against a mock Anthropic client); Smartlead and Apollo HTTP clients; the deterministic performance monitor and daily cron; the full Supabase schema (10 tables); Sentry + PostHog wiring; legal and programmatic-SEO pages. 442 tests pass; typecheck is clean across all six workspaces.
 
 **Stubbed / Phase 2:** brand-voice URL fetch in the onboarding step (the agent works; the caller passes mock content); customer JWT auth (dashboard is currently email-keyed); the ops health page; the Postmark result email; end-to-end Outbound integration; e2e/Playwright tests; production deployment config. Nothing has been run against live credentials.
 
