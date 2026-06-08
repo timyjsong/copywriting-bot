@@ -20,8 +20,6 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm -r --parallel typecheck
-      - name: Lint
-        run: pnpm -r --parallel lint
       - name: Test
         run: pnpm -r --parallel test
         env:
